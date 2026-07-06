@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+Cargo.lock
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+/site
+fuzz/target
+fuzz/corpus

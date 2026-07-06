@@ -1,0 +1,35 @@
+[package]
+name         = "forensic-vfs-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description  = "Read-only forensic virtual-filesystem contracts: the ImageSource positioned-read byte source, layered PathSpec locators, and the FileSystem navigation trait — the KNOWLEDGE leaf every disk/container/filesystem reader in the fleet implements"
+license.workspace = true
+repository.workspace = true
+homepage      = "https://github.com/SecurityRonin/forensic-vfs"
+documentation = "https://docs.rs/forensic-vfs-core"
+authors       = ["Albert Hui"]
+keywords      = ["forensics", "vfs", "disk-image", "filesystem", "dfir"]
+categories    = ["filesystem", "parser-implementations", "no-std::no-alloc"]
+# Fuzz harness + fixtures are for the repo, not consumers of the leaf.
+exclude       = ["fuzz/", "tests/data/"]
+
+[features]
+default = []
+# Serialize/deserialize PathSpec so a finding, a mount session, or an evidence
+# row can persist the exact open-recipe and re-resolve deterministically.
+serde = ["dep:serde"]
+# Bridge to the fleet reporting model: adds the findings() surface returning
+# forensicnomicon::report::Finding. Non-default so a bare reader stays leaf.
+findings = ["dep:forensicnomicon"]
+
+[dependencies]
+thiserror       = { workspace = true }
+serde           = { workspace = true, optional = true }
+forensicnomicon = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
