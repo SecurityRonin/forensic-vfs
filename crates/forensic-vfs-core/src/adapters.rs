@@ -1,6 +1,192 @@
 //! Concrete [`crate::ImageSource`] adapters: a positioned-read OS file, a byte
 //! sub-range of a parent source, and a legacy `Read + Seek` cursor view.
 
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::path::Path;
+
+use crate::error::{VfsError, VfsResult};
+use crate::source::{DynSource, ImageSource, SourceId};
+
+/// A byte window `[base, base+len)` of a parent source, itself an
+/// [`ImageSource`]. How a partition, VSS store, embedded image, or decrypted
+/// volume is addressed. `len` is clamped to the parent's bounds at construction,
+/// so a `read_at` can never escape the window.
+pub struct SubRange {
+    parent: DynSource,
+    base: u64,
+    len: u64,
+}
+
+impl SubRange {
+    /// A window starting at `base` in `parent`, at most `len` bytes, clamped to
+    /// whatever the parent actually has from `base`.
+    #[must_use]
+    pub fn new(parent: DynSource, base: u64, len: u64) -> Self {
+        let available = parent.len().saturating_sub(base);
+        Self {
+            parent,
+            base,
+            len: len.min(available),
+        }
+    }
+}
+
+impl ImageSource for SubRange {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+        if offset >= self.len {
+            return Ok(0);
+        }
+        let remaining = self.len - offset;
+        let want = (buf.len() as u64).min(remaining) as usize;
+        let Some(dst) = buf.get_mut(..want) else {
+            return Ok(0); // cov:unreachable: want <= buf.len() by the min above
+        };
+        let abs = self.base.saturating_add(offset);
+        self.parent.read_at(abs, dst)
+    }
+
+    fn source_id(&self) -> SourceId {
+        // Shares the parent's lineage so a block cache accounts by base source.
+        self.parent.source_id()
+    }
+}
+
+/// Wrap a raw OS file as an [`ImageSource`] using positioned reads
+/// (`pread`/`seek_read`) — NOT a `Mutex<Seek>`, so parallel workers never
+/// serialize on one cursor at the bottom of the stack.
+pub struct FileSource {
+    file: File,
+    len: u64,
+}
+
+impl FileSource {
+    /// Open `path` read-only as a base source.
+    pub fn open(path: impl AsRef<Path>) -> VfsResult<Self> {
+        let file = File::open(path).map_err(|source| VfsError::Io { op: "open", source })?;
+        Self::from_file(file)
+    }
+
+    /// Wrap an already-open file.
+    pub fn from_file(file: File) -> VfsResult<Self> {
+        let len = file
+            .metadata()
+            .map_err(|source| VfsError::Io {
+                op: "metadata",
+                source,
+            })?
+            .len();
+        Ok(Self { file, len })
+    }
+}
+
+impl ImageSource for FileSource {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+        if offset >= self.len {
+            return Ok(0);
+        }
+        // Exactly one cfg block survives stripping and becomes the tail
+        // expression — positioned reads, no cursor lock.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+            self.file
+                .read_at(buf, offset)
+                .map_err(|source| VfsError::Io {
+                    op: "read_at",
+                    source,
+                })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            self.file
+                .seek_read(buf, offset)
+                .map_err(|source| VfsError::Io {
+                    op: "seek_read",
+                    source,
+                })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = buf;
+            Err(VfsError::Unsupported {
+                layer: "FileSource",
+                scheme: "positioned read".to_string(),
+            })
+        }
+    }
+}
+
+/// A single-owner `Read + Seek` *view* over a [`DynSource`], for legacy
+/// `analyse(&mut R)` / `build_filesystem(R)` call sites during migration. Clamped
+/// to `[base, base+len)`; reads advance an internal cursor over positioned reads.
+pub struct SourceCursor {
+    src: DynSource,
+    base: u64,
+    len: u64,
+    pos: u64,
+}
+
+impl SourceCursor {
+    /// A cursor over the window `[base, base+len)` of `src` (clamped to the
+    /// source's bounds), positioned at the start.
+    #[must_use]
+    pub fn new(src: DynSource, base: u64, len: u64) -> Self {
+        let available = src.len().saturating_sub(base);
+        Self {
+            src,
+            base,
+            len: len.min(available),
+            pos: 0,
+        }
+    }
+}
+
+impl Read for SourceCursor {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.pos >= self.len {
+            return Ok(0);
+        }
+        let remaining = self.len - self.pos;
+        let want = (buf.len() as u64).min(remaining) as usize;
+        let Some(dst) = buf.get_mut(..want) else {
+            return Ok(0); // cov:unreachable: want <= buf.len() by the min above
+        };
+        let abs = self.base.saturating_add(self.pos);
+        let n = self.src.read_at(abs, dst).map_err(io::Error::other)?;
+        self.pos = self.pos.saturating_add(n as u64);
+        Ok(n)
+    }
+}
+
+impl Seek for SourceCursor {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        // i128 spans u64+i64 without overflow.
+        let target: i128 = match pos {
+            SeekFrom::Start(o) => i128::from(o),
+            SeekFrom::End(o) => i128::from(self.len) + i128::from(o),
+            SeekFrom::Current(o) => i128::from(self.pos) + i128::from(o),
+        };
+        if target < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek before start of window",
+            ));
+        }
+        self.pos = target.min(i128::from(u64::MAX)) as u64;
+        Ok(self.pos)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Seek, SeekFrom};
