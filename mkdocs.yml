@@ -1,0 +1,32 @@
+site_name: forensic-vfs
+site_url: https://securityronin.github.io/forensic-vfs/
+site_description: Read-only forensic virtual-filesystem contracts — the ImageSource byte source, PathSpec locators, and the FileSystem navigation trait.
+repo_url: https://github.com/SecurityRonin/forensic-vfs
+repo_name: SecurityRonin/forensic-vfs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue grey
+      accent: cyan
+  features:
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Validation: validation.md
+  - Privacy Policy: privacy.md
+  - Terms of Service: terms.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.superfences
+
+plugins:
+  - search
