@@ -620,6 +620,26 @@ mod tests {
         assert!(PathSpec::from_uri("fvfs:range:notanumber").is_err());
     }
 
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_round_trips_as_the_canonical_uri() {
+        let spec = PathSpec::os("/evidence/DC01.E01")
+            .push(Layer::Container {
+                format: ContainerFormat::Ewf,
+            })
+            .push(Layer::Fs {
+                kind: FsKind::Ntfs,
+                at: NodeAddr::Path(vec![b"Windows".to_vec(), b"a/b".to_vec()]),
+            });
+        let json = serde_json::to_string(&spec).expect("serialize");
+        // Serialized form IS the canonical URI, as a JSON string.
+        assert_eq!(json, format!("\"{}\"", spec.to_uri()));
+        let back: PathSpec = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, spec);
+        // A malformed URI string is a deserialization error, not a panic.
+        assert!(serde_json::from_str::<PathSpec>("\"not-a-spec\"").is_err());
+    }
+
     #[test]
     fn human_display_is_readable_and_not_the_uri() {
         let spec = PathSpec::os("/evidence/DC01.E01")
