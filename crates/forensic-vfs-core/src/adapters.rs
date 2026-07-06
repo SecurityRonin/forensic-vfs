@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::error::{VfsError, VfsResult};
+use crate::error::{io_err, VfsResult};
 use crate::source::{DynSource, ImageSource, SourceId};
 
 /// A byte window `[base, base+len)` of a parent source, itself an
@@ -67,19 +67,13 @@ pub struct FileSource {
 impl FileSource {
     /// Open `path` read-only as a base source.
     pub fn open(path: impl AsRef<Path>) -> VfsResult<Self> {
-        let file = File::open(path).map_err(|source| VfsError::Io { op: "open", source })?;
+        let file = File::open(path).map_err(io_err("open"))?;
         Self::from_file(file)
     }
 
     /// Wrap an already-open file.
     pub fn from_file(file: File) -> VfsResult<Self> {
-        let len = file
-            .metadata()
-            .map_err(|source| VfsError::Io {
-                op: "metadata",
-                source,
-            })?
-            .len();
+        let len = file.metadata().map_err(io_err("metadata"))?.len();
         Ok(Self { file, len })
     }
 }
@@ -98,27 +92,19 @@ impl ImageSource for FileSource {
         #[cfg(unix)]
         {
             use std::os::unix::fs::FileExt;
-            self.file
-                .read_at(buf, offset)
-                .map_err(|source| VfsError::Io {
-                    op: "read_at",
-                    source,
-                })
+            self.file.read_at(buf, offset).map_err(io_err("read_at"))
         }
         #[cfg(windows)]
         {
             use std::os::windows::fs::FileExt;
             self.file
                 .seek_read(buf, offset)
-                .map_err(|source| VfsError::Io {
-                    op: "seek_read",
-                    source,
-                })
+                .map_err(io_err("seek_read"))
         }
         #[cfg(not(any(unix, windows)))]
         {
             let _ = buf;
-            Err(VfsError::Unsupported {
+            Err(crate::error::VfsError::Unsupported {
                 layer: "FileSource",
                 scheme: "positioned read".to_string(),
             })
@@ -192,32 +178,17 @@ mod tests {
     use std::io::{Read, Seek, SeekFrom};
     use std::sync::Arc;
 
-    use crate::error::VfsResult;
     use crate::source::{DynSource, ImageSource, SourceId};
 
     use super::{FileSource, SourceCursor, SubRange};
 
-    /// In-memory test double: a byte vector presented as an ImageSource.
-    struct MemSource(Vec<u8>);
-    impl ImageSource for MemSource {
-        fn len(&self) -> u64 {
-            self.0.len() as u64
-        }
-        fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
-            let Ok(off) = usize::try_from(offset) else {
-                return Ok(0);
-            };
-            let Some(src) = self.0.get(off..) else {
-                return Ok(0);
-            };
-            let n = src.len().min(buf.len());
-            buf[..n].copy_from_slice(&src[..n]);
-            Ok(n)
-        }
-    }
-
+    /// A real tempfile-backed base source, so these tests exercise `FileSource`
+    /// (positioned reads) rather than a hand-rolled in-memory double.
     fn mem(bytes: &[u8]) -> DynSource {
-        Arc::new(MemSource(bytes.to_vec()))
+        use std::io::Write;
+        let mut f = tempfile::tempfile().unwrap();
+        f.write_all(bytes).unwrap();
+        Arc::new(FileSource::from_file(f).unwrap())
     }
 
     #[test]

@@ -147,3 +147,21 @@ pub enum VfsError {
 
 /// Convenience alias.
 pub type VfsResult<T> = Result<T, VfsError>;
+
+/// A `map_err` closure that wraps a [`std::io::Error`] as [`VfsError::Io`] with a
+/// static operation label — one place to build the variant, so every I/O call
+/// site is a one-liner.
+pub(crate) fn io_err(op: &'static str) -> impl Fn(std::io::Error) -> VfsError {
+    move |source| VfsError::Io { op, source }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::io_err;
+
+    #[test]
+    fn io_err_wraps_with_the_op_label() {
+        let e = io_err("read")(std::io::Error::other("boom"));
+        assert!(format!("{e}").contains("read"));
+    }
+}
