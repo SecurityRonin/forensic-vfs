@@ -4,6 +4,36 @@
 //! never a panic. This is the front door for every offset/length field parsed
 //! from an attacker-controllable image.
 
+/// Define a fixed-width integer reader that returns 0 when the window at `off`
+/// is not fully in range (too short, offset past EOF, or `off + width`
+/// overflowing `usize`) — never a panic.
+macro_rules! bounded_reader {
+    ($name:ident, $ty:ty, $width:literal, $from_bytes:ident) => {
+        #[doc = concat!("Read a ", stringify!($ty), " at `off`; 0 if out of range. Never panics.")]
+        #[must_use]
+        pub fn $name(data: &[u8], off: usize) -> $ty {
+            let Some(end) = off.checked_add($width) else {
+                return 0;
+            };
+            match data.get(off..end) {
+                Some(slice) => {
+                    let mut buf = [0u8; $width];
+                    buf.copy_from_slice(slice);
+                    <$ty>::$from_bytes(buf)
+                }
+                None => 0,
+            }
+        }
+    };
+}
+
+bounded_reader!(be_u16, u16, 2, from_be_bytes);
+bounded_reader!(be_u32, u32, 4, from_be_bytes);
+bounded_reader!(be_u64, u64, 8, from_be_bytes);
+bounded_reader!(le_u16, u16, 2, from_le_bytes);
+bounded_reader!(le_u32, u32, 4, from_le_bytes);
+bounded_reader!(le_u64, u64, 8, from_le_bytes);
+
 #[cfg(test)]
 mod tests {
     use super::{be_u16, be_u32, be_u64, le_u16, le_u32, le_u64};
