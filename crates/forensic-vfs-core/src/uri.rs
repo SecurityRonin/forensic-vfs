@@ -494,6 +494,21 @@ impl fmt::Display for PathSpec {
     }
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for PathSpec {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_uri())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for PathSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let uri = String::deserialize(d)?;
+        PathSpec::from_uri(&uri).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::crypto::CryptoScheme;
