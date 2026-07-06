@@ -1,0 +1,26 @@
+[package]
+name    = "forensic-vfs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[[bin]]
+name = "fuzz_pathspec"
+path = "fuzz_targets/fuzz_pathspec.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "fuzz_read"
+path = "fuzz_targets/fuzz_read.rs"
+test = false
+doc  = false
+
+[dependencies]
+libfuzzer-sys     = "0.4"
+forensic-vfs-core = { path = "../crates/forensic-vfs-core" }
