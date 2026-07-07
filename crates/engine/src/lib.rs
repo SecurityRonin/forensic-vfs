@@ -308,10 +308,10 @@ impl Gpt {
         let mut volumes = Vec::new();
         for i in 0..num_entries {
             let Some(base) = i.checked_mul(entry_size) else {
-                break;
+                break; // cov:unreachable: num_entries<=256 & entry_size<=512 bound base
             };
             let Some(entry) = arr.get(base..base.saturating_add(entry_size)) else {
-                break;
+                break; // cov:unreachable: arr is sized num_entries*entry_size
             };
             // An all-zero type GUID marks an unused entry.
             let type_guid = entry.get(0..16).unwrap_or(&[]);
@@ -371,4 +371,135 @@ fn guid_hint(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use forensic_vfs::ImageSource;
+    use std::io::Write;
+
+    struct Mem(Vec<u8>);
+    impl ImageSource for Mem {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+            let off = usize::try_from(offset).unwrap_or(usize::MAX);
+            let Some(s) = self.0.get(off..) else {
+                return Ok(0);
+            };
+            let n = s.len().min(buf.len());
+            buf[..n].copy_from_slice(&s[..n]);
+            Ok(n)
+        }
+    }
+    fn mem(b: Vec<u8>) -> DynSource {
+        Arc::new(Mem(b))
+    }
+    fn window(b: &[u8]) -> SniffWindow<'_> {
+        SniffWindow::new(0, b)
+    }
+
+    #[test]
+    fn default_is_new_and_probers_report_their_kinds() {
+        let _ = Vfs::default().open_source(mem(vec![0u8; 64])).unwrap();
+        assert_eq!(NtfsProbe.kind(), FsKind::Ntfs);
+        assert_eq!(MbrProbe.scheme(), VolumeScheme::Mbr);
+        assert_eq!(GptProbe.scheme(), VolumeScheme::Gpt);
+    }
+
+    #[test]
+    fn probers_say_no_on_unrecognized_bytes() {
+        let empty = window(&[]);
+        assert_eq!(NtfsProbe.probe(&empty), Confidence::No);
+        assert_eq!(MbrProbe.probe(&empty), Confidence::No);
+        assert_eq!(GptProbe.probe(&empty), Confidence::No);
+        // 0x55AA present but only a 0xEE protective entry -> Mbr declines (GPT's job).
+        let mut prot = vec![0u8; 512];
+        prot[446 + 4] = 0xEE;
+        prot[446 + 12] = 1; // non-zero size
+        prot[510] = 0x55;
+        prot[511] = 0xaa;
+        assert_eq!(MbrProbe.probe(&window(&prot)), Confidence::No);
+    }
+
+    #[test]
+    fn ntfs_magic_but_invalid_boot_is_a_loud_error() {
+        // "NTFS    " at offset 3 makes NtfsProbe say Yes; the garbage then fails
+        // NtfsFs::open -> Decode error propagates (never a silent None).
+        let mut v = vec![0u8; 4096];
+        v[3..11].copy_from_slice(b"NTFS    ");
+        assert!(Vfs::new().open_source(mem(v)).is_err());
+    }
+
+    #[test]
+    fn a_garbage_e01_path_fails_loud() {
+        let mut f = tempfile::Builder::new().suffix(".E01").tempfile().unwrap();
+        f.write_all(b"not really an EWF image").unwrap();
+        f.flush().unwrap();
+        assert!(Vfs::new().open(f.path()).is_err());
+    }
+
+    #[test]
+    fn gpt_parse_without_signature_errors_and_mbr_volume_index_is_bounded() {
+        // Gpt::parse directly on bytes lacking EFI PART.
+        assert!(Gpt::parse(mem(vec![0u8; 1024])).is_err());
+        // A valid single-entry MBR; open_volume out of range errors.
+        let mut d = vec![0u8; 512];
+        d[446 + 4] = 0x07;
+        d[446 + 8] = 1; // start LBA 1
+        d[446 + 12] = 4; // size 4 sectors
+        d[510] = 0x55;
+        d[511] = 0xaa;
+        let m = Mbr::parse(mem(d)).unwrap();
+        assert_eq!(m.scheme(), VolumeScheme::Mbr);
+        assert_eq!(m.volumes().len(), 1);
+        assert!(m.open_volume(0).is_ok());
+        assert!(m.open_volume(9).is_err());
+    }
+
+    #[test]
+    fn recursion_is_depth_capped_on_a_self_referential_mbr() {
+        // A partition covering the whole disk (start 0) recurses into itself; the
+        // depth cap breaks it, yielding None rather than a stack overflow.
+        let mut d = vec![0u8; 1024];
+        d[446 + 4] = 0x83; // linux
+                           // start LBA 0 (bytes stay 0), size 2 sectors
+        d[446 + 12] = 2;
+        d[510] = 0x55;
+        d[511] = 0xaa;
+        assert!(Vfs::new().open_source(mem(d)).unwrap().is_none());
+    }
+
+    #[test]
+    fn guid_hint_is_lowercase_hex() {
+        assert_eq!(guid_hint(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+    }
+
+    #[test]
+    fn gpt_parse_skips_unused_and_reversed_entries() {
+        let mut d = vec![0u8; 1280];
+        d[512..520].copy_from_slice(b"EFI PART");
+        d[512 + 72..512 + 80].copy_from_slice(&2u64.to_le_bytes()); // entries LBA 2
+        d[512 + 80..512 + 84].copy_from_slice(&2u32.to_le_bytes()); // num entries
+        d[512 + 84..512 + 88].copy_from_slice(&128u32.to_le_bytes()); // entry size
+                                                                      // entry 0 @ 1024: valid basic-data partition, first 100 last 200
+        d[1024] = 0xa2; // non-zero type GUID
+        d[1024 + 32..1024 + 40].copy_from_slice(&100u64.to_le_bytes());
+        d[1024 + 40..1024 + 48].copy_from_slice(&200u64.to_le_bytes());
+        // entry 1 @ 1152: non-zero GUID but last<first -> skipped (continue)
+        d[1152] = 0xa2;
+        d[1152 + 32..1152 + 40].copy_from_slice(&500u64.to_le_bytes());
+        d[1152 + 40..1152 + 48].copy_from_slice(&400u64.to_le_bytes());
+        let g = Gpt::parse(mem(d)).unwrap();
+        assert_eq!(g.scheme(), VolumeScheme::Gpt);
+        assert_eq!(g.volumes().len(), 1, "reversed entry 1 is skipped");
+        assert_eq!(g.volumes()[0].start, 100 * 512);
+        assert!(g.open_volume(0).is_ok());
+        assert!(g.open_volume(7).is_err());
+
+        // test helper: a read starting past the end returns 0
+        assert_eq!(Mem(vec![1, 2, 3]).read_at(99, &mut [0u8; 4]).unwrap(), 0);
+    }
 }
