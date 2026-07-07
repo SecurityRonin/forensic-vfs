@@ -20,12 +20,26 @@ fn walk_enumerates_the_mounted_tree_for_every_filesystem() {
         let ev = Vfs::new().open(Path::new(&path)).expect("open evidence");
         let fs = ev.fs.expect("a filesystem");
         let entries = walk(fs.as_ref()).expect("walk");
+        // FS names are raw bytes: ISO 9660 uppercases and appends a ";1" version,
+        // so normalize (strip the version, lowercase) for the cross-FS comparison.
+        let norm = |c: &[u8]| -> Vec<u8> {
+            c.split(|&b| b == b';')
+                .next()
+                .unwrap_or(c)
+                .to_ascii_lowercase()
+        };
         assert!(
             entries
                 .iter()
-                .any(|e| e.path.last().map(Vec::as_slice) == Some(wanted.as_bytes())),
-            "{img}: walk should surface {wanted} (found {} entries)",
-            entries.len()
+                .filter_map(|e| e.path.last())
+                .any(|c| norm(c) == wanted.as_bytes()),
+            "{img}: walk should surface {wanted} (found {} entries: {:?})",
+            entries.len(),
+            entries
+                .iter()
+                .filter_map(|e| e.path.last())
+                .map(|c| String::from_utf8_lossy(c).into_owned())
+                .collect::<Vec<_>>()
         );
     }
 }

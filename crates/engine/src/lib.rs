@@ -5,15 +5,16 @@
 //! of evidence and mounts a read-only `dyn FileSystem`. This is the
 //! ORCHESTRATION crate — the one place that depends *down* on every fleet reader.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
 use forensic_vfs::adapters::{FileSource, SeekPoolSource, SourceCursor, SubRange};
 use forensic_vfs::read::{le_u32, le_u64};
 use forensic_vfs::{
-    Confidence, ContainerDecoder, ContainerFormat, DynFs, DynSource, FileSystemProbe, FsKind,
-    PathSpec, Registry, SmallHex, SniffWindow, VfsError, VfsResult, VolumeDesc, VolumeKind,
-    VolumeScheme, VolumeSystem, VolumeSystemProbe,
+    Confidence, ContainerDecoder, ContainerFormat, DynFs, DynSource, FileId, FileSystem,
+    FileSystemProbe, FsKind, FsMeta, NodeKind, PathSpec, Registry, SmallHex, SniffWindow, VfsError,
+    VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemProbe,
 };
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
@@ -565,6 +566,51 @@ impl ContainerDecoder for VmdkDecoder {
         let vsize = reader.virtual_disk_size();
         Ok(Arc::new(SeekPoolSource::single(reader, vsize)))
     }
+}
+
+/// Cap on directory recursion depth in [`walk`] — a filesystem-loop guard.
+const WALK_MAX_DEPTH: usize = 256;
+
+/// One node found by [`walk`]: its path components (filesystem names are bytes,
+/// not guaranteed UTF-8), its filesystem id, and its metadata.
+pub struct WalkEntry {
+    pub path: Vec<Vec<u8>>,
+    pub id: FileId,
+    pub meta: FsMeta,
+}
+
+/// Recursively enumerate every node of a mounted filesystem from the root — the
+/// traversal a triage consumer runs over `Vfs::open(...).fs`. Depth-capped and
+/// visited-guarded against directory loops; `.`/`..` self/parent entries are
+/// skipped. Returns the nodes; a per-node read error aborts loud.
+pub fn walk(fs: &dyn FileSystem) -> VfsResult<Vec<WalkEntry>> {
+    let mut out = Vec::new();
+    let mut visited: HashSet<FileId> = HashSet::new();
+    let mut stack: Vec<(Vec<Vec<u8>>, FileId, usize)> = vec![(Vec::new(), fs.root(), 0)];
+    while let Some((prefix, dir_id, depth)) = stack.pop() {
+        if depth > WALK_MAX_DEPTH || !visited.insert(dir_id) {
+            continue;
+        }
+        for entry in fs.read_dir(dir_id)? {
+            let entry = entry?;
+            if matches!(entry.name.as_slice(), b"." | b"..") {
+                continue;
+            }
+            let mut path = prefix.clone();
+            path.push(entry.name);
+            let meta = fs.meta(entry.id)?;
+            let is_dir = matches!(meta.kind, NodeKind::Dir);
+            out.push(WalkEntry {
+                path: path.clone(),
+                id: entry.id,
+                meta,
+            });
+            if is_dir {
+                stack.push((path, entry.id, depth + 1));
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
