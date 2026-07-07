@@ -180,7 +180,7 @@ mod tests {
 
     use crate::source::{DynSource, ImageSource, SourceId};
 
-    use super::{FileSource, SourceCursor, SubRange};
+    use super::{FileSource, SeekPoolSource, SourceCursor, SubRange};
 
     /// A real tempfile-backed base source, so these tests exercise `FileSource`
     /// (positioned reads) rather than a hand-rolled in-memory double.
@@ -268,5 +268,25 @@ mod tests {
         assert_eq!(rest, vec![6, 7]);
         // SeekFrom::End clamps to the window length.
         assert_eq!(cur.seek(SeekFrom::End(0)).unwrap(), 6);
+    }
+    #[test]
+    fn seek_pool_source_bridges_read_seek_to_image_source() {
+        use std::io::Cursor;
+        let data: Vec<u8> = (0..=255).collect();
+        let len = data.len() as u64;
+        // Two independent cursors over the same bytes = a 2-reader pool.
+        let pool =
+            SeekPoolSource::new(vec![Cursor::new(data.clone()), Cursor::new(data.clone())], len);
+        assert_eq!(pool.len(), 256);
+        let mut buf = [0u8; 4];
+        assert_eq!(pool.read_at(10, &mut buf).unwrap(), 4);
+        assert_eq!(buf, [10, 11, 12, 13]);
+        // read past EOF -> 0
+        assert_eq!(pool.read_at(256, &mut buf).unwrap(), 0);
+        // usable as a DynSource (single-reader pool)
+        let src: DynSource = Arc::new(SeekPoolSource::single(Cursor::new(data), len));
+        let mut b2 = [0u8; 2];
+        assert_eq!(src.read_at(254, &mut b2).unwrap(), 2);
+        assert_eq!(b2, [254, 255]);
     }
 }
