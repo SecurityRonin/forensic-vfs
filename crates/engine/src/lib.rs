@@ -159,6 +159,7 @@ pub fn default_registry() -> Registry {
         .container(VhdDecoder)
         .container(Qcow2Decoder)
         .container(VmdkDecoder)
+        .container(VhdxDecoder)
 }
 
 /// Resolve the base [`DynSource`] for a path. EWF is multi-segment and opens *by
@@ -661,6 +662,39 @@ impl ContainerDecoder for VmdkDecoder {
     }
 }
 
+/// VHDX (Hyper-V v2) container: the file identifier `vhdxfile` sits at offset 0.
+struct VhdxDecoder;
+
+impl ContainerDecoder for VhdxDecoder {
+    fn format(&self) -> ContainerFormat {
+        ContainerFormat::Vhdx
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.has_magic(0, vhdx::FILE_MAGIC) {
+            Confidence::Yes {
+                how: "VHDX file magic",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynSource> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let reader =
+            vhdx::VhdxReader::open_reader(Box::new(cursor)).map_err(|e| VfsError::Decode {
+                layer: "vhdx",
+                offset: 0,
+                detail: e.to_string(),
+                bytes: SmallHex::new(&[]),
+            })?;
+        let vsize = reader.virtual_disk_size();
+        Ok(Arc::new(SeekPoolSource::single(reader, vsize)))
+    }
+}
+
 /// Cap on directory recursion depth in [`walk`] — a filesystem-loop guard.
 const WALK_MAX_DEPTH: usize = 256;
 
@@ -810,6 +844,7 @@ mod tests {
         assert_eq!(VhdDecoder.format(), ContainerFormat::Vhd);
         assert_eq!(Qcow2Decoder.format(), ContainerFormat::Qcow2);
         assert_eq!(VmdkDecoder.format(), ContainerFormat::Vmdk);
+        assert_eq!(VhdxDecoder.format(), ContainerFormat::Vhdx);
         // Valid magic but garbage body -> the reader fails -> loud error, never
         // a silent None.
         let mut vhd = vec![0u8; 4096];
@@ -821,6 +856,9 @@ mod tests {
         let mut v = vec![0u8; 4096];
         v[0..4].copy_from_slice(b"KDMV");
         assert!(Vfs::new().open_source(mem(v)).is_err());
+        let mut x = vec![0u8; 4096];
+        x[0..8].copy_from_slice(vhdx::FILE_MAGIC);
+        assert!(Vfs::new().open_source(mem(x)).is_err());
     }
 
     #[test]
