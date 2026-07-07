@@ -12,6 +12,7 @@ forensic-vfs = "0.1"
 ewf       = { path = "../../../ewf-forensic/core", features = ["vfs"] }
 ntfs-core = { path = "../../../ntfs-forensic/core", features = ["vfs"] }
 vhd       = { version = "0.1", package = "vhd-core" }
+qcow2     = { version = "0.3", package = "qcow2-core" }
 
 [dev-dependencies]
 tempfile = "3"

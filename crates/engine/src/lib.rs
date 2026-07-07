@@ -116,6 +116,7 @@ pub fn default_registry() -> Registry {
         .volume_system(GptProbe)
         .volume_system(MbrProbe)
         .container(VhdDecoder)
+        .container(Qcow2Decoder)
 }
 
 /// Resolve the base [`DynSource`] for a path. EWF is multi-segment and opens *by
@@ -410,6 +411,38 @@ impl ContainerDecoder for VhdDecoder {
         let reader =
             vhd::VhdReader::open_reader(Box::new(cursor)).map_err(|e| VfsError::Decode {
                 layer: "vhd",
+                offset: 0,
+                detail: e.to_string(),
+                bytes: SmallHex::new(&[]),
+            })?;
+        let vsize = reader.virtual_disk_size();
+        Ok(Arc::new(SeekPoolSource::single(reader, vsize)))
+    }
+}
+
+/// QCOW2 (QEMU Copy-On-Write v2) container: magic `QFI\xfb`. Decodes to its
+/// virtual disk via `qcow2-core`.
+struct Qcow2Decoder;
+
+impl ContainerDecoder for Qcow2Decoder {
+    fn format(&self) -> ContainerFormat {
+        ContainerFormat::Qcow2
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.has_magic(0, &[0x51, 0x46, 0x49, 0xfb]) {
+            Confidence::Yes { how: "QCOW2 magic" }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynSource> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let reader =
+            qcow2::Qcow2Reader::open_reader(Box::new(cursor)).map_err(|e| VfsError::Decode {
+                layer: "qcow2",
                 offset: 0,
                 detail: e.to_string(),
                 bytes: SmallHex::new(&[]),
