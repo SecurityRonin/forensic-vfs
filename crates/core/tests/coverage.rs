@@ -8,19 +8,17 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use forensic_vfs_core::adapters::{SourceCursor, SubRange};
-use forensic_vfs_core::crypto::CryptoScheme;
-use forensic_vfs_core::error::VfsResult;
-use forensic_vfs_core::fs::{
-    ByteRun, ExtentStream, FsKind, NodeStream, RunAlloc, RunFlags, RunInfo,
-};
-use forensic_vfs_core::registry::{
+use forensic_vfs::adapters::{SourceCursor, SubRange};
+use forensic_vfs::crypto::CryptoScheme;
+use forensic_vfs::error::VfsResult;
+use forensic_vfs::fs::{ByteRun, ExtentStream, FsKind, NodeStream, RunAlloc, RunFlags, RunInfo};
+use forensic_vfs::registry::{
     ContainerDecoder, ContainerFormat, CryptoProbe, FileSystemProbe, Registry, SniffWindow,
     VolumeSystemProbe,
 };
-use forensic_vfs_core::source::{DynSource, ImageSource, SourceId};
-use forensic_vfs_core::volume::VolumeScheme;
-use forensic_vfs_core::{Layer, NodeAddr, PathSpec};
+use forensic_vfs::source::{DynSource, ImageSource, SourceId};
+use forensic_vfs::volume::VolumeScheme;
+use forensic_vfs::{Layer, NodeAddr, PathSpec};
 
 struct MemSource(Vec<u8>);
 impl ImageSource for MemSource {
@@ -48,7 +46,7 @@ fn uri_round_trips(spec: &PathSpec) {
 
 #[test]
 fn both_addr_with_empty_path_round_trips() {
-    use forensic_vfs_core::fs::FileId;
+    use forensic_vfs::fs::FileId;
     // A `Both` with no observed path components — the id-only branch.
     uri_round_trips(&PathSpec::os("/x").push(Layer::Fs {
         kind: FsKind::Ntfs,
@@ -139,8 +137,8 @@ impl ContainerDecoder for Dc {
     fn format(&self) -> ContainerFormat {
         ContainerFormat::Raw
     }
-    fn probe(&self, _w: &SniffWindow) -> forensic_vfs_core::Confidence {
-        forensic_vfs_core::Confidence::No
+    fn probe(&self, _w: &SniffWindow) -> forensic_vfs::Confidence {
+        forensic_vfs::Confidence::No
     }
     fn open(&self, src: DynSource) -> VfsResult<DynSource> {
         Ok(src)
@@ -151,11 +149,11 @@ impl VolumeSystemProbe for Vp {
     fn scheme(&self) -> VolumeScheme {
         VolumeScheme::Mbr
     }
-    fn probe(&self, _w: &SniffWindow) -> forensic_vfs_core::Confidence {
-        forensic_vfs_core::Confidence::No
+    fn probe(&self, _w: &SniffWindow) -> forensic_vfs::Confidence {
+        forensic_vfs::Confidence::No
     }
-    fn open(&self, _src: DynSource) -> VfsResult<Box<dyn forensic_vfs_core::volume::VolumeSystem>> {
-        Err(forensic_vfs_core::VfsError::Unsupported {
+    fn open(&self, _src: DynSource) -> VfsResult<Box<dyn forensic_vfs::volume::VolumeSystem>> {
+        Err(forensic_vfs::VfsError::Unsupported {
             layer: "vol",
             scheme: "test".to_string(),
         })
@@ -166,11 +164,11 @@ impl CryptoProbe for Cp {
     fn scheme(&self) -> CryptoScheme {
         CryptoScheme::Luks1
     }
-    fn probe(&self, _w: &SniffWindow) -> forensic_vfs_core::Confidence {
-        forensic_vfs_core::Confidence::No
+    fn probe(&self, _w: &SniffWindow) -> forensic_vfs::Confidence {
+        forensic_vfs::Confidence::No
     }
-    fn open(&self, _src: DynSource) -> VfsResult<Box<dyn forensic_vfs_core::crypto::CryptoLayer>> {
-        Err(forensic_vfs_core::VfsError::Unsupported {
+    fn open(&self, _src: DynSource) -> VfsResult<Box<dyn forensic_vfs::crypto::CryptoLayer>> {
+        Err(forensic_vfs::VfsError::Unsupported {
             layer: "crypto",
             scheme: "test".to_string(),
         })
@@ -181,11 +179,11 @@ impl FileSystemProbe for Fp {
     fn kind(&self) -> FsKind {
         FsKind::Fat
     }
-    fn probe(&self, _w: &SniffWindow) -> forensic_vfs_core::Confidence {
-        forensic_vfs_core::Confidence::No
+    fn probe(&self, _w: &SniffWindow) -> forensic_vfs::Confidence {
+        forensic_vfs::Confidence::No
     }
-    fn open(&self, _src: DynSource) -> VfsResult<forensic_vfs_core::fs::DynFs> {
-        Err(forensic_vfs_core::VfsError::Unsupported {
+    fn open(&self, _src: DynSource) -> VfsResult<forensic_vfs::fs::DynFs> {
+        Err(forensic_vfs::VfsError::Unsupported {
             layer: "fs",
             scheme: "test".to_string(),
         })
@@ -231,7 +229,7 @@ fn stream_constructors_yield_items() {
     assert_eq!(ext.count(), 1);
     let nodes = NodeStream::new(std::iter::empty());
     assert_eq!(nodes.count(), 0);
-    assert_eq!(forensic_vfs_core::fs::DirStream::empty().count(), 0);
+    assert_eq!(forensic_vfs::fs::DirStream::empty().count(), 0);
 }
 
 #[test]
@@ -267,8 +265,8 @@ fn from_uri_rejects_every_malformed_layer() {
 
 #[test]
 fn display_renders_every_layer_kind() {
-    use forensic_vfs_core::fs::{FileId, StreamId};
-    use forensic_vfs_core::pathspec::SnapshotRef;
+    use forensic_vfs::fs::{FileId, StreamId};
+    use forensic_vfs::pathspec::SnapshotRef;
     let spec = PathSpec::os("/img.raw")
         .push(Layer::Range { start: 0, len: 512 })
         .push(Layer::Volume {
@@ -323,12 +321,12 @@ fn sourcecursor_current_and_negative_seek() {
 #[cfg(feature = "findings")]
 #[test]
 fn findings_default_surfaces_are_empty() {
-    use forensic_vfs_core::crypto::{CredentialSource, CryptoLayer};
-    use forensic_vfs_core::fs::{
+    use forensic_vfs::crypto::{CredentialSource, CryptoLayer};
+    use forensic_vfs::fs::{
         Allocation, DirStream, DynFs, FileId, FileSystem, FsMeta, MacbTimes, NodeKind,
         ResidencyKind, SectorSizes, StreamId, TimeZonePolicy,
     };
-    use forensic_vfs_core::volume::{VolumeDesc, VolumeSystem};
+    use forensic_vfs::volume::{VolumeDesc, VolumeSystem};
 
     struct F;
     impl FileSystem for F {

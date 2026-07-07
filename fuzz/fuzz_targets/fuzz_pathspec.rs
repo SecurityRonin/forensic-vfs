@@ -3,7 +3,7 @@
 //! spec string pasted from a report. `from_uri` over arbitrary bytes must never
 //! panic, and anything it accepts must round-trip byte-for-byte back to itself.
 
-use forensic_vfs_core::PathSpec;
+use forensic_vfs::PathSpec;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

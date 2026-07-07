@@ -1,5 +1,5 @@
 [package]
-name         = "forensic-vfs-core"
+name         = "forensic-vfs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ description  = "Read-only forensic virtual-filesystem contracts: the ImageSource
 license.workspace = true
 repository.workspace = true
 homepage      = "https://github.com/SecurityRonin/forensic-vfs"
-documentation = "https://docs.rs/forensic-vfs-core"
+documentation = "https://docs.rs/forensic-vfs"
 authors       = ["Albert Hui"]
 keywords      = ["forensics", "vfs", "disk-image", "filesystem", "dfir"]
 categories    = ["filesystem", "parser-implementations", "no-std::no-alloc"]

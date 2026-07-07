@@ -1,6 +1,6 @@
 # Validation
 
-`forensic-vfs-core` is a contract crate: it defines traits and one value-producing
+`forensic-vfs` is a contract crate: it defines traits and one value-producing
 codec (the `PathSpec` canonical URI). Correctness is established by the evidence
 below, tiered honestly by *what confirms it*.
 

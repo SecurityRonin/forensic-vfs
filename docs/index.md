@@ -1,4 +1,4 @@
-# forensic-vfs-core
+# forensic-vfs
 
 The KNOWLEDGE-leaf contract crate of the universal forensic VFS. It defines one
 read-only, positioned-read byte edge — `ImageSource` — that every disk, container,
@@ -33,6 +33,6 @@ path can write.
 
 ## Where it fits
 
-`forensic-vfs-core` realizes Phase 1 of the universal forensic VFS. See
+`forensic-vfs` realizes Phase 1 of the universal forensic VFS. See
 [Architecture](architecture.md) for the layered model and the phase plan, and
 [Validation](validation.md) for the evidence behind the correctness claims.

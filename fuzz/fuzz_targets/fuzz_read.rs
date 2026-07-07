@@ -3,7 +3,7 @@
 //! this is the panic-free foundation every reader parses offsets through. Drive
 //! them with arbitrary bytes and an arbitrary offset derived from the input.
 
-use forensic_vfs_core::read::{be_u16, be_u32, be_u64, le_u16, le_u32, le_u64};
+use forensic_vfs::read::{be_u16, be_u32, be_u64, le_u16, le_u32, le_u64};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

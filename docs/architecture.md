@@ -1,6 +1,6 @@
 # Architecture
 
-`forensic-vfs-core` defines six transform kinds, each a trait. They are **not a
+`forensic-vfs` defines six transform kinds, each a trait. They are **not a
 fixed lane** — the engine's resolver applies them as a graph, because crypto,
 volume, and container layers nest in any order on real evidence.
 
@@ -57,7 +57,7 @@ never stored in the address.
 
 | Crate | Role | Status |
 |---|---|---|
-| **`forensic-vfs-core`** | byte source, volume/crypto/filesystem traits, `PathSpec`, registry contracts | this crate |
+| **`forensic-vfs`** | byte source, volume/crypto/filesystem traits, `PathSpec`, registry contracts | this crate |
 | `forensic-vfs-engine` | registry + graph resolver + concurrent block cache, depending down on every reader | planned |
 | `disk-forensic` / `disk4n6` | thin CLI over the engine | evolving |
 

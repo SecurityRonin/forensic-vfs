@@ -1,4 +1,4 @@
-//! # forensic-vfs-core
+//! # forensic-vfs
 //!
 //! The read-only forensic virtual-filesystem **contracts** — the KNOWLEDGE leaf
 //! every disk/container/filesystem reader in the fleet implements. It defines the

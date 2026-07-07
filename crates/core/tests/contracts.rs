@@ -8,18 +8,18 @@
 
 use std::sync::Arc;
 
-use forensic_vfs_core::crypto::{Credential, CredentialSource, CryptoLayer, CryptoScheme};
-use forensic_vfs_core::error::{SmallHex, VfsError, VfsResult};
-use forensic_vfs_core::fs::{
+use forensic_vfs::crypto::{Credential, CredentialSource, CryptoLayer, CryptoScheme};
+use forensic_vfs::error::{SmallHex, VfsError, VfsResult};
+use forensic_vfs::fs::{
     Allocation, DirEntry, DirStream, DynFs, ExtentStream, FileId, FileSystem, FsKind, FsMeta,
     MacbTimes, NodeKind, NodeStream, ResidencyKind, SectorSizes, StreamId, TimeZonePolicy,
 };
-use forensic_vfs_core::registry::{Confidence, Registry, SniffWindow};
-use forensic_vfs_core::source::{
+use forensic_vfs::registry::{Confidence, Registry, SniffWindow};
+use forensic_vfs::source::{
     read_exact_at, DynSource, Extent, Extents, ImageSource, SourceId, SourceView,
 };
-use forensic_vfs_core::volume::{VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem};
-use forensic_vfs_core::{Layer, PathSpec};
+use forensic_vfs::volume::{VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem};
+use forensic_vfs::{Layer, PathSpec};
 
 // --- doubles -------------------------------------------------------------
 
