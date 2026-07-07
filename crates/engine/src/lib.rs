@@ -54,11 +54,17 @@ impl Vfs {
     /// `Evidence` with `fs: None` — a genuinely clean unknown, not an error.
     pub fn open(&self, path: &Path) -> VfsResult<Evidence> {
         let base = open_base(path)?;
-        let fs = self.resolve(base, 0)?;
+        let fs = self.open_source(base)?;
         Ok(Evidence {
             root: PathSpec::os(path),
             fs,
         })
+    }
+
+    /// Resolve a filesystem directly from a byte source — an in-memory buffer, a
+    /// nested image, or a carved region. `Ok(None)` when nothing recognizes it.
+    pub fn open_source(&self, source: DynSource) -> VfsResult<Option<DynFs>> {
+        self.resolve(source, 0)
     }
 
     /// Recursively resolve a source to a filesystem: sniff its head; if a
