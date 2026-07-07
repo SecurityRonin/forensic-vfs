@@ -19,6 +19,12 @@ use forensic_vfs::{
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
 const MAX_DEPTH: usize = 8;
 
+/// Bytes read into the sniff window. Sized so a prober can see multi-offset
+/// magics — notably the ISO 9660 Primary Volume Descriptor (`CD001` at byte
+/// offset 32769, LBA 16). NTFS/ext4/MBR/GPT/container magics all sit in the
+/// first few KiB, so the larger window is a strict superset. One bounded read.
+const SNIFF_CAP: u64 = 40 * 1024;
+
 /// One resolved piece of evidence: its locator plus the mounted filesystem, when
 /// the engine detected one (`None` for a source no registered prober recognized).
 pub struct Evidence {
@@ -74,7 +80,8 @@ impl Vfs {
         if depth > MAX_DEPTH {
             return Ok(None);
         }
-        let mut head = [0u8; 4096];
+        let cap = source.len().clamp(1, SNIFF_CAP) as usize;
+        let mut head = vec![0u8; cap];
         let n = source.read_at(0, &mut head)?;
         let window = SniffWindow::new(0, head.get(..n).unwrap_or(&[]));
 
@@ -114,6 +121,7 @@ pub fn default_registry() -> Registry {
     Registry::new()
         .filesystem(NtfsProbe)
         .filesystem(Ext4Probe)
+        .filesystem(Iso9660Probe)
         .volume_system(GptProbe)
         .volume_system(MbrProbe)
         .container(VhdDecoder)
@@ -198,6 +206,41 @@ impl FileSystemProbe for Ext4Probe {
         let cursor = SourceCursor::new(src, 0, len);
         let fs = ext4fs::Ext4Fs::open(cursor).map_err(|e| VfsError::Decode {
             layer: "ext4",
+            offset: 0,
+            detail: e.to_string(),
+            bytes: SmallHex::new(&[]),
+        })?;
+        Ok(Arc::new(fs))
+    }
+}
+
+/// ISO 9660 filesystem prober: recognizes the Primary Volume Descriptor and
+/// mounts `iso::vfs::IsoVfs`. The PVD's `CD001` standard identifier sits at byte
+/// offset 32769 (LBA 16, +1), so this needs the enlarged sniff window.
+struct Iso9660Probe;
+
+impl FileSystemProbe for Iso9660Probe {
+    fn kind(&self) -> FsKind {
+        FsKind::Iso9660
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        // ECMA-119 §8.1: a Volume Descriptor at LBA 16 begins with the standard
+        // identifier "CD001" at byte offset 32769 (32768 + 1 type byte).
+        if w.has_magic(32769, b"CD001") {
+            Confidence::Yes {
+                how: "ISO 9660 CD001 volume descriptor",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynFs> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let fs = iso::vfs::IsoVfs::open(cursor).map_err(|e| VfsError::Decode {
+            layer: "iso9660",
             offset: 0,
             detail: e.to_string(),
             bytes: SmallHex::new(&[]),
@@ -658,6 +701,23 @@ mod tests {
         v[1080] = 0x53;
         v[1081] = 0xef;
         v[1048..1052].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        assert!(Vfs::new().open_source(mem(v)).is_err());
+    }
+
+    #[test]
+    fn iso9660_probe_kind_and_open_error() {
+        assert_eq!(Iso9660Probe.kind(), FsKind::Iso9660);
+        assert_eq!(Iso9660Probe.probe(&window(&[])), Confidence::No);
+        // CD001 present at offset 32769 makes the probe say Yes; the surrounding
+        // garbage then fails IsoVfs::open -> loud Decode error, never a silent None.
+        let mut v = vec![0u8; 40 * 1024];
+        v[32769..32774].copy_from_slice(b"CD001");
+        assert_eq!(
+            Iso9660Probe.probe(&window(&v)),
+            Confidence::Yes {
+                how: "ISO 9660 CD001 volume descriptor"
+            }
+        );
         assert!(Vfs::new().open_source(mem(v)).is_err());
     }
 
