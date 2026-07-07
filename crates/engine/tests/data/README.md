@@ -61,3 +61,18 @@ hdiutil create -srcfolder /tmp/vfssrc -fs HFS+ -volname VFSHFS -layout NONE hfsp
 Oracle: `hdiutil imageinfo hfsplus.dmg` — **Sector Count 3714** (⇒ virtual disk
 `3714 × 512 = 1,901,568` bytes, matched by `DmgReader::virtual_disk_size()`); the
 root HFS+ directory holds `HELLO.txt`. Used by `open_dmg.rs`.
+
+## AFF4
+
+`ext4.aff4` (MD5 `f56dca10d6faaf7d0ecc996c1848dfa9`, ~18 KiB) wraps the
+TSK-validated `ext4.img` **byte-for-byte** as a direct `aff4:ImageStream`
+(512-byte chunks, `aff4:NullCompressor`, Deflate-stored in the Zip so the
+mostly-zero image compresses to ~18 KiB). It exercises the AFF4 (`PK\x03\x04` →
+`Maybe`) container leg. Minted with a throwaway generator that mirrors
+`aff4-core`'s `testutil` ImageStream layout (stream ARN `aff4://issen-test-stream`,
+bevy `issen-test-stream/00000000` + `.index`); no `pyaff4`/`aff4imager` was needed.
+
+Oracle (two tiers): (1) `aff4-core`'s own reader reconstructs the virtual disk
+**byte-identically** to `ext4.img` (`virtual_disk_size` = 4,194,304); (2) The
+Sleuth Kit on that ext4 image — `hello.txt` = **inode 13**, 12 bytes,
+"Hello, ext4!" (see the ext4 entry above). Used by `open_aff4.rs`.

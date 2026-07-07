@@ -20,6 +20,7 @@ qcow2     = { version = "0.3", package = "qcow2-core" }
 vmdk      = { version = "0.8", package = "vmdk-core" }
 vhdx      = { package = "vhdx-core", path = "../../../vhdx-forensic/core" }
 dmg       = { package = "dmg-core", path = "../../../dmg-forensic/core" }
+aff4      = { path = "../../../aff4-forensic/core" }
 
 [dev-dependencies]
 tempfile = "3"
