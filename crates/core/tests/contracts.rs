@@ -286,6 +286,31 @@ fn confidence_and_sniff_window() {
 }
 
 #[test]
+fn sniff_window_tail_and_total_len() {
+    // new(): total_len = base + bytes.len(); the tail is empty, so any
+    // from-end probe declines without panic.
+    let head = SniffWindow::new(0, &[1, 2, 3, 4]);
+    assert_eq!(head.total_len(), 4);
+    assert!(!head.has_magic_from_end(1, &[4]));
+    assert_eq!(head.tail_at(1, 1), None);
+
+    // with_tail(): a koly-like trailer sitting at file_len - tail.len(), with a
+    // total_len far larger than the head window (the DMG footer case).
+    let tail = [b'k', b'o', b'l', b'y', 0, 0];
+    let w = SniffWindow::with_tail(0, &[0u8; 8], 1_000_000, &tail);
+    assert_eq!(w.total_len(), 1_000_000);
+    // "koly" starts at tail[tail.len() - 6] == tail[0].
+    assert!(w.has_magic_from_end(6, b"koly"));
+    assert!(!w.has_magic_from_end(6, b"KOLY"));
+    assert_eq!(w.tail_at(6, 4), Some(&b"koly"[..]));
+    // from_end greater than the tail length -> false/None, never a panic.
+    assert!(!w.has_magic_from_end(7, b"koly"));
+    assert_eq!(w.tail_at(7, 4), None);
+    // n runs past the end of the tail -> None.
+    assert_eq!(w.tail_at(2, 4), None);
+}
+
+#[test]
 fn extents_dense_and_allocated_len() {
     assert!(Extents::dense(0).is_empty());
     let e = Extents::dense(100);
