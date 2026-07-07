@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core"]
+members = ["crates/core", "crates/engine"]
 
 # Single source of truth for fields shared by every member (DRY): bump version /
 # MSRV / license here once; members inherit via `field.workspace = true`.
@@ -34,3 +34,9 @@ doc_markdown             = "allow"
 cast_possible_truncation = "allow"
 cast_possible_wrap       = "allow"
 cast_sign_loss           = "allow"
+
+# feat/engine WIP: the engine + the external reader path-deps all resolve
+# forensic-vfs to THIS workspace's leaf, so their trait impls unify. Branch-only;
+# main has no engine member and no patch.
+[patch.crates-io]
+forensic-vfs = { path = "crates/core" }
