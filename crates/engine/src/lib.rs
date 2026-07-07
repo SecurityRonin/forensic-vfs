@@ -177,6 +177,7 @@ pub fn default_registry() -> Registry {
         .container(VmdkDecoder)
         .container(VhdxDecoder)
         .container(DmgDecoder)
+        .container(Aff4Decoder)
 }
 
 /// Resolve the base [`DynSource`] for a path. EWF is multi-segment and opens *by
@@ -747,6 +748,39 @@ impl ContainerDecoder for DmgDecoder {
     }
 }
 
+/// AFF4 (Advanced Forensic Format 4) container: a Zip archive, so it sniffs only
+/// as a `Maybe` on the `PK\x03\x04` local-file-header magic — `open` (via
+/// `aff4-core`) disambiguates a real AFF4 from an unrelated Zip.
+struct Aff4Decoder;
+
+impl ContainerDecoder for Aff4Decoder {
+    fn format(&self) -> ContainerFormat {
+        ContainerFormat::Aff4
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.has_magic(0, &[0x50, 0x4b, 0x03, 0x04]) {
+            Confidence::Maybe
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynSource> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let reader =
+            aff4::Aff4Reader::open_reader(Box::new(cursor)).map_err(|e| VfsError::Decode {
+                layer: "aff4",
+                offset: 0,
+                detail: e.to_string(),
+                bytes: SmallHex::new(&[]),
+            })?;
+        let vsize = reader.virtual_disk_size();
+        Ok(Arc::new(SeekPoolSource::single(reader, vsize)))
+    }
+}
+
 /// Cap on directory recursion depth in [`walk`] — a filesystem-loop guard.
 const WALK_MAX_DEPTH: usize = 256;
 
@@ -928,6 +962,22 @@ mod tests {
         let mut v = vec![0u8; 1024];
         v[512..516].copy_from_slice(b"koly");
         v[512 + 224..512 + 232].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert!(Vfs::new().open_source(mem(v)).is_err());
+    }
+
+    #[test]
+    fn aff4_decoder_format_probe_and_open_error() {
+        assert_eq!(Aff4Decoder.format(), ContainerFormat::Aff4);
+        // No PK header -> No; a PK header -> Maybe (open disambiguates).
+        assert_eq!(Aff4Decoder.probe(&window(&[])), Confidence::No);
+        assert_eq!(
+            Aff4Decoder.probe(&window(&[0x50, 0x4b, 0x03, 0x04])),
+            Confidence::Maybe
+        );
+        // PK magic but not a valid AFF4 (garbage after the header) -> the reader
+        // fails -> loud error, never a silent None.
+        let mut v = vec![0u8; 256];
+        v[0..4].copy_from_slice(&[0x50, 0x4b, 0x03, 0x04]);
         assert!(Vfs::new().open_source(mem(v)).is_err());
     }
 
