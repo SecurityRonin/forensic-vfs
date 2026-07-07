@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::error::{io_err, VfsResult};
 use crate::source::{DynSource, ImageSource, SourceId};
@@ -173,6 +174,82 @@ impl Seek for SourceCursor {
     }
 }
 
+/// Wrap one or more legacy `Read + Seek` readers as an [`ImageSource`]. A
+/// `read_at` checks out a free cursor from the pool (blocking on one if all are
+/// busy), so parallel reads scale up to the pool size instead of serializing on
+/// a single lock. A single-reader pool is a plain mutex. This is how a container
+/// decoder (VHD/VMDK/QCOW2) hands its `Read + Seek` reader back as a `DynSource`.
+pub struct SeekPoolSource<R: Read + Seek + Send> {
+    pool: Vec<Mutex<R>>,
+    len: u64,
+}
+
+impl<R: Read + Seek + Send> SeekPoolSource<R> {
+    /// A pool of independent cursors over the same `len`-byte stream.
+    #[must_use]
+    pub fn new(readers: Vec<R>, len: u64) -> Self {
+        Self {
+            pool: readers.into_iter().map(Mutex::new).collect(),
+            len,
+        }
+    }
+
+    /// A single-cursor pool (a plain mutex).
+    #[must_use]
+    pub fn single(reader: R, len: u64) -> Self {
+        Self::new(vec![reader], len)
+    }
+
+    fn checkout(&self) -> Option<std::sync::MutexGuard<'_, R>> {
+        for m in &self.pool {
+            if let Ok(g) = m.try_lock() {
+                return Some(g);
+            }
+        }
+        // All busy (or a single-cursor pool): block on the first, recovering a
+        // poisoned lock instead of panicking.
+        self.pool
+            .first()
+            .map(|m| m.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+}
+
+impl<R: Read + Seek + Send> ImageSource for SeekPoolSource<R> {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+        if offset >= self.len {
+            return Ok(0);
+        }
+        let Some(mut guard) = self.checkout() else {
+            return Ok(0); // cov:unreachable: the pool is non-empty by construction
+        };
+        guard
+            .seek(SeekFrom::Start(offset))
+            .map_err(io_err("seek"))?;
+        let remaining = self.len - offset;
+        let want = (buf.len() as u64).min(remaining) as usize;
+        let Some(dst) = buf.get_mut(..want) else {
+            return Ok(0); // cov:unreachable: want <= buf.len() by the min above
+        };
+        // Read::read may return short; loop to fill the window or hit EOF.
+        let mut total = 0;
+        while total < dst.len() {
+            let Some(slot) = dst.get_mut(total..) else {
+                break; // cov:unreachable: total < dst.len()
+            };
+            let n = guard.read(slot).map_err(io_err("read"))?;
+            if n == 0 {
+                break;
+            }
+            total += n;
+        }
+        Ok(total)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Seek, SeekFrom};
@@ -275,8 +352,10 @@ mod tests {
         let data: Vec<u8> = (0..=255).collect();
         let len = data.len() as u64;
         // Two independent cursors over the same bytes = a 2-reader pool.
-        let pool =
-            SeekPoolSource::new(vec![Cursor::new(data.clone()), Cursor::new(data.clone())], len);
+        let pool = SeekPoolSource::new(
+            vec![Cursor::new(data.clone()), Cursor::new(data.clone())],
+            len,
+        );
         assert_eq!(pool.len(), 256);
         let mut buf = [0u8; 4];
         assert_eq!(pool.read_at(10, &mut buf).unwrap(), 4);
