@@ -27,6 +27,10 @@ const MAX_DEPTH: usize = 8;
 /// first few KiB, so the larger window is a strict superset. One bounded read.
 const SNIFF_CAP: u64 = 40 * 1024;
 
+/// Bytes read into the *tail* sniff window from the end of the source. Sized to
+/// cover trailer signatures like the DMG `koly` footer (at `total_len - 512`).
+const TAIL_CAP: u64 = 4096;
+
 /// One resolved piece of evidence: its locator plus the mounted filesystem, when
 /// the engine detected one (`None` for a source no registered prober recognized).
 pub struct Evidence {
@@ -97,10 +101,22 @@ impl Vfs {
         if depth > MAX_DEPTH {
             return Ok(None);
         }
-        let cap = source.len().clamp(1, SNIFF_CAP) as usize;
+        let total = source.len();
+        let cap = total.clamp(1, SNIFF_CAP) as usize;
         let mut head = vec![0u8; cap];
         let n = source.read_at(0, &mut head)?;
-        let window = SniffWindow::new(0, head.get(..n).unwrap_or(&[]));
+        // A tail window (the last bytes of the source) so a prober can match a
+        // trailer signature the head never reaches — e.g. the DMG koly footer.
+        let tail_cap = total.min(TAIL_CAP);
+        let tail_start = total - tail_cap;
+        let mut tail = vec![0u8; tail_cap as usize];
+        let tn = source.read_at(tail_start, &mut tail)?;
+        let window = SniffWindow::with_tail(
+            0,
+            head.get(..n).unwrap_or(&[]),
+            total,
+            tail.get(..tn).unwrap_or(&[]),
+        );
 
         for probe in self.registry.filesystems() {
             if probe.probe(&window).is_candidate() {
@@ -160,6 +176,7 @@ pub fn default_registry() -> Registry {
         .container(Qcow2Decoder)
         .container(VmdkDecoder)
         .container(VhdxDecoder)
+        .container(DmgDecoder)
 }
 
 /// Resolve the base [`DynSource`] for a path. EWF is multi-segment and opens *by
@@ -695,6 +712,41 @@ impl ContainerDecoder for VhdxDecoder {
     }
 }
 
+/// DMG (Apple UDIF disk image) container: the `koly` trailer sits at the very
+/// end of the file (`total_len - 512`), so this is a tail-probed decoder. Decodes
+/// to its virtual disk stream via `dmg-core`.
+struct DmgDecoder;
+
+impl ContainerDecoder for DmgDecoder {
+    fn format(&self) -> ContainerFormat {
+        ContainerFormat::Dmg
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        // UDIF footer: the 512-byte koly trailer begins at file_len - 512.
+        if w.has_magic_from_end(512, b"koly") {
+            Confidence::Yes {
+                how: "DMG koly trailer",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynSource> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let reader = dmg::DmgReader::open(cursor).map_err(|e| VfsError::Decode {
+            layer: "dmg",
+            offset: 0,
+            detail: e.to_string(),
+            bytes: SmallHex::new(&[]),
+        })?;
+        let vsize = reader.virtual_disk_size();
+        Ok(Arc::new(SeekPoolSource::single(reader, vsize)))
+    }
+}
+
 /// Cap on directory recursion depth in [`walk`] — a filesystem-loop guard.
 const WALK_MAX_DEPTH: usize = 256;
 
@@ -859,6 +911,24 @@ mod tests {
         let mut x = vec![0u8; 4096];
         x[0..8].copy_from_slice(vhdx::FILE_MAGIC);
         assert!(Vfs::new().open_source(mem(x)).is_err());
+    }
+
+    #[test]
+    fn dmg_decoder_format_probe_and_open_error() {
+        assert_eq!(DmgDecoder.format(), ContainerFormat::Dmg);
+        // No koly trailer in the tail -> No (an all-zero window).
+        assert_eq!(
+            DmgDecoder.probe(&SniffWindow::with_tail(0, &[], 1024, &[0u8; 512])),
+            Confidence::No
+        );
+        // koly at the tail (file_len - 512) makes the tail probe say Yes; an
+        // xml plist region that overruns the file then fails DmgReader::open ->
+        // loud error, never a silent None. koly starts at offset 512; its
+        // xml_length field (koly+224) is set past the file end.
+        let mut v = vec![0u8; 1024];
+        v[512..516].copy_from_slice(b"koly");
+        v[512 + 224..512 + 232].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert!(Vfs::new().open_source(mem(v)).is_err());
     }
 
     #[test]
