@@ -54,18 +54,43 @@ impl Confidence {
 }
 
 /// A bounded window of bytes handed to a prober. Holds a prefix of the source
-/// plus the absolute base offset that prefix starts at, so a prober reads magic
-/// without an unbounded scan and without touching the source directly.
+/// (the *head*) plus the absolute base offset that prefix starts at, so a prober
+/// reads magic without an unbounded scan and without touching the source
+/// directly. It also carries the source's `total_len` and a *tail* window (the
+/// last N bytes), so a prober can match a trailer signature — e.g. the DMG
+/// `koly` footer at `total_len - 512` — that the head window never reaches.
 pub struct SniffWindow<'a> {
     base: u64,
     bytes: &'a [u8],
+    total_len: u64,
+    tail: &'a [u8],
 }
 
 impl<'a> SniffWindow<'a> {
-    /// A window of `bytes` that begins at absolute `base` in the source.
+    /// A head-only window of `bytes` that begins at absolute `base` in the
+    /// source. `total_len` is inferred as `base + bytes.len()` and the tail is
+    /// empty — existing head-magic probers are unaffected.
     #[must_use]
     pub fn new(base: u64, bytes: &'a [u8]) -> Self {
-        Self { base, bytes }
+        Self {
+            base,
+            bytes,
+            total_len: base.saturating_add(bytes.len() as u64),
+            tail: &[],
+        }
+    }
+
+    /// A window carrying both a head (`bytes` at `base`) and a `tail` (the last
+    /// bytes of the source), plus the source's `total_len`. `tail` must end at
+    /// `total_len` for the from-end probes to be correct.
+    #[must_use]
+    pub fn with_tail(base: u64, bytes: &'a [u8], total_len: u64, tail: &'a [u8]) -> Self {
+        Self {
+            base,
+            bytes,
+            total_len,
+            tail,
+        }
     }
 
     /// The absolute offset the window starts at.
@@ -74,10 +99,16 @@ impl<'a> SniffWindow<'a> {
         self.base
     }
 
-    /// The window bytes.
+    /// The window (head) bytes.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         self.bytes
+    }
+
+    /// The total length of the source this window was sniffed from.
+    #[must_use]
+    pub fn total_len(&self) -> u64 {
+        self.total_len
     }
 
     /// The `n` bytes at window-relative `off`, or `None` if out of range. Never
@@ -92,6 +123,23 @@ impl<'a> SniffWindow<'a> {
     #[must_use]
     pub fn has_magic(&self, off: usize, magic: &[u8]) -> bool {
         self.at(off, magic.len()) == Some(magic)
+    }
+
+    /// The `n` bytes of the tail beginning `from_end` bytes before the source's
+    /// end, or `None` when the tail is too short. Never panics.
+    #[must_use]
+    pub fn tail_at(&self, from_end: usize, n: usize) -> Option<&[u8]> {
+        let start = self.tail.len().checked_sub(from_end)?;
+        let end = start.checked_add(n)?;
+        self.tail.get(start..end)
+    }
+
+    /// True when the tail carries `magic` starting `from_end` bytes before the
+    /// source's end (e.g. `has_magic_from_end(512, b"koly")` for a DMG footer).
+    /// False if the tail is too short — the panic-free trailer probe.
+    #[must_use]
+    pub fn has_magic_from_end(&self, from_end: usize, magic: &[u8]) -> bool {
+        self.tail_at(from_end, magic.len()) == Some(magic)
     }
 }
 
