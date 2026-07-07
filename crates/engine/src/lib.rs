@@ -13,7 +13,7 @@ use forensic_vfs::adapters::{FileSource, SeekPoolSource, SourceCursor, SubRange}
 use forensic_vfs::read::{le_u32, le_u64};
 use forensic_vfs::{
     Confidence, ContainerDecoder, ContainerFormat, DynFs, DynSource, FileId, FileSystem,
-    FileSystemProbe, FsKind, FsMeta, NodeKind, PathSpec, Registry, SmallHex, SniffWindow, VfsError,
+    FileSystemProbe, FsKind, FsMeta, Layer, NodeAddr, NodeKind, PathSpec, Registry, SmallHex, SniffWindow, VfsError,
     VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemProbe,
 };
 
@@ -61,23 +61,38 @@ impl Vfs {
     /// `Evidence` with `fs: None` — a genuinely clean unknown, not an error.
     pub fn open(&self, path: &Path) -> VfsResult<Evidence> {
         let base = open_base(path)?;
-        let fs = self.open_source(base)?;
-        Ok(Evidence {
-            root: PathSpec::os(path),
-            fs,
-        })
+        let base_spec = PathSpec::os(path);
+        match self.resolve(base, base_spec.clone(), 0)? {
+            Some((fs, spec)) => Ok(Evidence {
+                root: spec,
+                fs: Some(fs),
+            }),
+            None => Ok(Evidence {
+                root: base_spec,
+                fs: None,
+            }),
+        }
     }
 
     /// Resolve a filesystem directly from a byte source — an in-memory buffer, a
     /// nested image, or a carved region. `Ok(None)` when nothing recognizes it.
     pub fn open_source(&self, source: DynSource) -> VfsResult<Option<DynFs>> {
-        self.resolve(source, 0)
+        let base = PathSpec::root(Layer::Range {
+            start: 0,
+            len: source.len(),
+        });
+        Ok(self.resolve(source, base, 0)?.map(|(fs, _spec)| fs))
     }
 
     /// Recursively resolve a source to a filesystem: sniff its head; if a
     /// filesystem prober recognizes it, mount it; otherwise if a volume-system
     /// prober recognizes it, descend into each volume and resolve that.
-    fn resolve(&self, source: DynSource, depth: usize) -> VfsResult<Option<DynFs>> {
+    fn resolve(
+        &self,
+        source: DynSource,
+        spec: PathSpec,
+        depth: usize,
+    ) -> VfsResult<Option<(DynFs, PathSpec)>> {
         if depth > MAX_DEPTH {
             return Ok(None);
         }
@@ -88,7 +103,12 @@ impl Vfs {
 
         for probe in self.registry.filesystems() {
             if probe.probe(&window).is_candidate() {
-                return Ok(Some(probe.open(source.clone())?));
+                let fs = probe.open(source.clone())?;
+                let spec = spec.push(Layer::Fs {
+                    kind: probe.kind(),
+                    at: NodeAddr::Path(Vec::new()),
+                });
+                return Ok(Some((fs, spec)));
             }
         }
         for vsp in self.registry.volume_systems() {
@@ -96,8 +116,13 @@ impl Vfs {
                 let vs = vsp.open(source.clone())?;
                 for index in 0..vs.volumes().len() {
                     let sub = vs.open_volume(index)?;
-                    if let Some(fs) = self.resolve(sub, depth + 1)? {
-                        return Ok(Some(fs));
+                    let child = spec.clone().push(Layer::Volume {
+                        scheme: vsp.scheme(),
+                        index,
+                        guid: None,
+                    });
+                    if let Some(found) = self.resolve(sub, child, depth + 1)? {
+                        return Ok(Some(found));
                     }
                 }
             }
@@ -105,8 +130,11 @@ impl Vfs {
         for cd in self.registry.containers() {
             if cd.probe(&window).is_candidate() {
                 let decoded = cd.open(source.clone())?;
-                if let Some(fs) = self.resolve(decoded, depth + 1)? {
-                    return Ok(Some(fs));
+                let child = spec.clone().push(Layer::Container {
+                    format: cd.format(),
+                });
+                if let Some(found) = self.resolve(decoded, child, depth + 1)? {
+                    return Ok(Some(found));
                 }
             }
         }
