@@ -15,7 +15,9 @@ const VHD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ntfs.vhd");
 #[test]
 fn vfs_open_decodes_vhd_container_to_ntfs() {
     let evidence = Vfs::new().open(Path::new(VHD)).expect("open vhd");
-    let fs = evidence.fs.expect("engine decoded the VHD container to NTFS");
+    let fs = evidence
+        .fs
+        .expect("engine decoded the VHD container to NTFS");
     assert_eq!(fs.kind(), forensic_vfs::FsKind::Ntfs);
 
     let id = fs

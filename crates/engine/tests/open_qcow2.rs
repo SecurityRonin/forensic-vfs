@@ -14,7 +14,9 @@ const QCOW2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ntfs.qcow2"
 #[test]
 fn vfs_open_decodes_qcow2_container_to_ntfs() {
     let evidence = Vfs::new().open(Path::new(QCOW2)).expect("open qcow2");
-    let fs = evidence.fs.expect("engine decoded the QCOW2 container to NTFS");
+    let fs = evidence
+        .fs
+        .expect("engine decoded the QCOW2 container to NTFS");
     assert_eq!(fs.kind(), forensic_vfs::FsKind::Ntfs);
     let id = fs
         .lookup(fs.root(), b"file1.txt")

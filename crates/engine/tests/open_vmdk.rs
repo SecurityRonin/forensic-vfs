@@ -14,7 +14,9 @@ const VMDK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ntfs.vmdk");
 #[test]
 fn vfs_open_decodes_vmdk_container_to_ntfs() {
     let evidence = Vfs::new().open(Path::new(VMDK)).expect("open vmdk");
-    let fs = evidence.fs.expect("engine decoded the VMDK container to NTFS");
+    let fs = evidence
+        .fs
+        .expect("engine decoded the VMDK container to NTFS");
     assert_eq!(fs.kind(), forensic_vfs::FsKind::Ntfs);
     let id = fs
         .lookup(fs.root(), b"file1.txt")
