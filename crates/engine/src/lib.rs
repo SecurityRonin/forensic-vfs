@@ -113,6 +113,7 @@ impl Vfs {
 pub fn default_registry() -> Registry {
     Registry::new()
         .filesystem(NtfsProbe)
+        .filesystem(Ext4Probe)
         .volume_system(GptProbe)
         .volume_system(MbrProbe)
         .container(VhdDecoder)
@@ -163,6 +164,40 @@ impl FileSystemProbe for NtfsProbe {
         let cursor = SourceCursor::new(src, 0, len);
         let fs = ntfs_core::NtfsFs::open(cursor).map_err(|e| VfsError::Decode {
             layer: "ntfs",
+            offset: 0,
+            detail: e.to_string(),
+            bytes: SmallHex::new(&[]),
+        })?;
+        Ok(Arc::new(fs))
+    }
+}
+
+/// ext2/3/4 filesystem prober: recognizes the ext superblock magic and mounts
+/// `ext4fs::Ext4Fs`.
+struct Ext4Probe;
+
+impl FileSystemProbe for Ext4Probe {
+    fn kind(&self) -> FsKind {
+        FsKind::Ext
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        // The ext superblock sits at byte offset 1024; its `s_magic` (0xEF53,
+        // little-endian) is at +0x38, i.e. absolute offset 1080.
+        if w.has_magic(1080, &[0x53, 0xEF]) {
+            Confidence::Yes {
+                how: "ext2/3/4 superblock magic",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynFs> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let fs = ext4fs::Ext4Fs::open(cursor).map_err(|e| VfsError::Decode {
+            layer: "ext4",
             offset: 0,
             detail: e.to_string(),
             bytes: SmallHex::new(&[]),

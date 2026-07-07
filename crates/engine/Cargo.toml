@@ -11,6 +11,7 @@ publish = false
 forensic-vfs = "0.1"
 ewf       = { path = "../../../ewf-forensic/core", features = ["vfs"] }
 ntfs-core = { path = "../../../ntfs-forensic/core", features = ["vfs"] }
+ext4fs    = { package = "ext4fs-core", path = "../../../ext4fs-forensic/ext4fs-core", features = ["vfs"] }
 vhd       = { version = "0.1", package = "vhd-core" }
 qcow2     = { version = "0.3", package = "qcow2-core" }
 vmdk      = { version = "0.8", package = "vmdk-core" }
