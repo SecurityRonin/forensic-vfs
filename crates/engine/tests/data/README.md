@@ -38,3 +38,9 @@ Oracle: The Sleuth Kit (`fsstat`/`fls`/`istat`/`icat -f iso9660`) — root direc
 at **block 23**; `HELLO.TXT;1` = data extent **LBA 24**, **15 bytes**, `icat` →
 `Hello, iso9660!`. Used by `open_iso.rs` to prove the engine's enlarged sniff
 window sees the PVD at offset 32768 and mounts the volume via `Iso9660Probe`.
+
+#### apfs_volume.bin / hfsplus_volume.bin
+Copied from apfs-forensic/tests/data/apfs_content.bin (Tier-2 self-minted real APFS
+carve, macOS shasum oracle) and hfsplus-forensic/tests/data/hfs_plus_volume.bin
+(Tier-1, TSK-oracle-validated). Engine end-to-end resolution fixtures for ApfsProbe
+(NXSB@32) and HfsPlusProbe (H+/HX@1024). Ground truth lives in the source repos.
