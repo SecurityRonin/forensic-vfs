@@ -552,6 +552,28 @@ mod tests {
     }
 
     #[test]
+    fn container_decoders_report_format_and_error_on_bad_content() {
+        assert_eq!(VhdDecoder.format(), ContainerFormat::Vhd);
+        assert_eq!(Qcow2Decoder.format(), ContainerFormat::Qcow2);
+        // Valid magic but garbage body -> the reader fails -> loud error, never
+        // a silent None.
+        let mut vhd = vec![0u8; 4096];
+        vhd[0..8].copy_from_slice(b"conectix");
+        assert!(Vfs::new().open_source(mem(vhd)).is_err());
+        let mut q = vec![0u8; 4096];
+        q[0..4].copy_from_slice(&[0x51, 0x46, 0x49, 0xfb]);
+        assert!(Vfs::new().open_source(mem(q)).is_err());
+    }
+
+    #[test]
+    fn a_valid_container_holding_no_filesystem_resolves_to_none() {
+        // An empty dynamic VHD decodes fine but its virtual disk is all zeros —
+        // no filesystem inside, so the container loop falls through to None.
+        let vhd = include_bytes!("../tests/data/empty.vhd").to_vec();
+        assert!(Vfs::new().open_source(mem(vhd)).unwrap().is_none());
+    }
+
+    #[test]
     fn guid_hint_is_lowercase_hex() {
         assert_eq!(guid_hint(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
     }
