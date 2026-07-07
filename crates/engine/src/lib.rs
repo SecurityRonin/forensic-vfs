@@ -650,6 +650,18 @@ mod tests {
     }
 
     #[test]
+    fn ext4_probe_kind_and_open_error() {
+        assert_eq!(Ext4Probe.kind(), FsKind::Ext);
+        // ext4 magic (0x53EF LE @ 1080) but an absurd s_log_block_size (@ 1048)
+        // -> Ext4Fs::open rejects it -> loud error, never a silent None.
+        let mut v = vec![0u8; 4096];
+        v[1080] = 0x53;
+        v[1081] = 0xef;
+        v[1048..1052].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        assert!(Vfs::new().open_source(mem(v)).is_err());
+    }
+
+    #[test]
     fn guid_hint_is_lowercase_hex() {
         assert_eq!(guid_hint(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
     }
