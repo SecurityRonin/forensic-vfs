@@ -117,6 +117,7 @@ pub fn default_registry() -> Registry {
         .volume_system(MbrProbe)
         .container(VhdDecoder)
         .container(Qcow2Decoder)
+        .container(VmdkDecoder)
 }
 
 /// Resolve the base [`DynSource`] for a path. EWF is multi-segment and opens *by
@@ -452,6 +453,42 @@ impl ContainerDecoder for Qcow2Decoder {
     }
 }
 
+/// VMDK (VMware Virtual Disk) monolithic/sparse container: magic `KDMV`. Decodes
+/// to its virtual disk via `vmdk-core` (multi-file flat extents are out of scope
+/// for the single-stream decoder).
+struct VmdkDecoder;
+
+impl ContainerDecoder for VmdkDecoder {
+    fn format(&self) -> ContainerFormat {
+        ContainerFormat::Vmdk
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        // Sparse-extent magic "KDMV" at offset 0 (monolithicSparse / streamOptimized).
+        if w.has_magic(0, b"KDMV") {
+            Confidence::Yes {
+                how: "VMDK KDMV magic",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynSource> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let boxed: Box<dyn vmdk::ReadSeek + Send> = Box::new(cursor);
+        let reader = vmdk::VmdkReader::open(boxed).map_err(|e| VfsError::Decode {
+            layer: "vmdk",
+            offset: 0,
+            detail: e.to_string(),
+            bytes: SmallHex::new(&[]),
+        })?;
+        let vsize = reader.virtual_disk_size();
+        Ok(Arc::new(SeekPoolSource::single(reader, vsize)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -555,6 +592,7 @@ mod tests {
     fn container_decoders_report_format_and_error_on_bad_content() {
         assert_eq!(VhdDecoder.format(), ContainerFormat::Vhd);
         assert_eq!(Qcow2Decoder.format(), ContainerFormat::Qcow2);
+        assert_eq!(VmdkDecoder.format(), ContainerFormat::Vmdk);
         // Valid magic but garbage body -> the reader fails -> loud error, never
         // a silent None.
         let mut vhd = vec![0u8; 4096];
@@ -563,6 +601,9 @@ mod tests {
         let mut q = vec![0u8; 4096];
         q[0..4].copy_from_slice(&[0x51, 0x46, 0x49, 0xfb]);
         assert!(Vfs::new().open_source(mem(q)).is_err());
+        let mut v = vec![0u8; 4096];
+        v[0..4].copy_from_slice(b"KDMV");
+        assert!(Vfs::new().open_source(mem(v)).is_err());
     }
 
     #[test]
