@@ -23,3 +23,18 @@ a 4 MiB `mkfs.ext4` image (4096-byte blocks, no partition table) containing
 `hello.txt` ("Hello, ext4!"). Oracle: The Sleuth Kit — `fls`/`istat`/`icat`
 report `hello.txt` = **inode 13**, 12 bytes, direct block 9; used by
 `open_ext4.rs` to prove the engine detects and mounts a bare ext4 volume.
+
+## ISO 9660
+
+`test.iso` (MD5 `e0f8babcd413a9a780481d9e086fc1a0`, 350 KiB) is a plain ISO 9660
+volume (no Joliet/Rock Ridge) minted with `mkisofs`:
+
+```
+mkdir -p /tmp/isoroot && printf 'Hello, iso9660!' > /tmp/isoroot/hello.txt
+mkisofs -o test.iso -V TESTVOL /tmp/isoroot
+```
+
+Oracle: The Sleuth Kit (`fsstat`/`fls`/`istat`/`icat -f iso9660`) — root directory
+at **block 23**; `HELLO.TXT;1` = data extent **LBA 24**, **15 bytes**, `icat` →
+`Hello, iso9660!`. Used by `open_iso.rs` to prove the engine's enlarged sniff
+window sees the PVD at offset 32768 and mounts the volume via `Iso9660Probe`.
