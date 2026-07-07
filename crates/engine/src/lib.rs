@@ -13,8 +13,9 @@ use forensic_vfs::adapters::{FileSource, SeekPoolSource, SourceCursor, SubRange}
 use forensic_vfs::read::{le_u32, le_u64};
 use forensic_vfs::{
     Confidence, ContainerDecoder, ContainerFormat, DynFs, DynSource, FileId, FileSystem,
-    FileSystemProbe, FsKind, FsMeta, Layer, NodeAddr, NodeKind, PathSpec, Registry, SmallHex, SniffWindow, VfsError,
-    VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemProbe,
+    FileSystemProbe, FsKind, FsMeta, Layer, NodeAddr, NodeKind, PathSpec, Registry, SmallHex,
+    SniffWindow, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem,
+    VolumeSystemProbe,
 };
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
@@ -151,6 +152,8 @@ pub fn default_registry() -> Registry {
         .filesystem(NtfsProbe)
         .filesystem(Ext4Probe)
         .filesystem(Iso9660Probe)
+        .filesystem(ApfsProbe)
+        .filesystem(HfsPlusProbe)
         .volume_system(GptProbe)
         .volume_system(MbrProbe)
         .container(VhdDecoder)
@@ -274,6 +277,68 @@ impl FileSystemProbe for Iso9660Probe {
             detail: e.to_string(),
             bytes: SmallHex::new(&[]),
         })?;
+        Ok(Arc::new(fs))
+    }
+}
+
+/// APFS container: the `nx_superblock` carries the magic `NXSB` at byte offset 32
+/// (immediately after the 32-byte `obj_phys` object header) in block 0.
+struct ApfsProbe;
+
+impl FileSystemProbe for ApfsProbe {
+    fn kind(&self) -> FsKind {
+        FsKind::Apfs
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.has_magic(32, b"NXSB") {
+            Confidence::Yes {
+                how: "APFS NXSB container superblock",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynFs> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let fs = apfs_core::vfs::ApfsFs::open(cursor).map_err(|e| VfsError::Decode {
+            layer: "apfs",
+            offset: 0,
+            detail: e.to_string(),
+            bytes: SmallHex::new(&[]),
+        })?;
+        Ok(Arc::new(fs))
+    }
+}
+
+/// HFS+ / HFSX: the volume header sits at byte offset 1024 and begins with the
+/// signature `H+` (`0x482B`) for HFS Plus or `HX` (`0x4858`) for HFSX.
+struct HfsPlusProbe;
+
+impl FileSystemProbe for HfsPlusProbe {
+    fn kind(&self) -> FsKind {
+        FsKind::HfsPlus
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        match w.at(1024, 2) {
+            Some([0x48, 0x2B] | [0x48, 0x58]) => Confidence::Yes {
+                how: "HFS+/HFSX volume header",
+            },
+            _ => Confidence::No,
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynFs> {
+        // The HFS+ reader is slice-based, so the whole volume is read into a Vec.
+        // No streaming path yet — a memory consideration for multi-GB volumes.
+        let len = src.len();
+        let mut volume = vec![0u8; usize::try_from(len).unwrap_or(usize::MAX)];
+        let n = src.read_at(0, &mut volume)?;
+        volume.truncate(n);
+        let fs = hfsplus::vfs::HfsFs::new(volume)?;
         Ok(Arc::new(fs))
     }
 }
@@ -793,6 +858,39 @@ mod tests {
             }
         );
         assert!(Vfs::new().open_source(mem(v)).is_err());
+    }
+
+    #[test]
+    fn apfs_probe_kind_and_open_error() {
+        assert_eq!(ApfsProbe.kind(), FsKind::Apfs);
+        assert_eq!(ApfsProbe.probe(&window(&[])), Confidence::No);
+        // NXSB at offset 32 makes the probe say Yes; the surrounding garbage then
+        // fails ApfsFs::open -> loud Decode error, never a silent None.
+        let mut v = vec![0u8; 40 * 1024];
+        v[32..36].copy_from_slice(b"NXSB");
+        assert_eq!(
+            ApfsProbe.probe(&window(&v)),
+            Confidence::Yes {
+                how: "APFS NXSB container superblock"
+            }
+        );
+        assert!(Vfs::new().open_source(mem(v)).is_err());
+    }
+
+    #[test]
+    fn hfsplus_probe_kind_and_no_on_short_window() {
+        assert_eq!(HfsPlusProbe.kind(), FsKind::HfsPlus);
+        // A window shorter than 1026 bytes cannot carry the @1024 signature.
+        assert_eq!(HfsPlusProbe.probe(&window(&[])), Confidence::No);
+        // HFSX signature 'HX' at 1024 is also accepted.
+        let mut v = vec![0u8; 40 * 1024];
+        v[1024..1026].copy_from_slice(&[0x48, 0x58]);
+        assert_eq!(
+            HfsPlusProbe.probe(&window(&v)),
+            Confidence::Yes {
+                how: "HFS+/HFSX volume header"
+            }
+        );
     }
 
     #[test]
