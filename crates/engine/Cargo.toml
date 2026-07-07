@@ -11,6 +11,7 @@ publish = false
 forensic-vfs = "0.1"
 ewf       = { path = "../../../ewf-forensic/core", features = ["vfs"] }
 ntfs-core = { path = "../../../ntfs-forensic/core", features = ["vfs"] }
+vhd       = { version = "0.1", package = "vhd-core" }
 
 [dev-dependencies]
 tempfile = "3"

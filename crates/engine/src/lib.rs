@@ -8,12 +8,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use forensic_vfs::adapters::{FileSource, SourceCursor, SubRange};
+use forensic_vfs::adapters::{FileSource, SeekPoolSource, SourceCursor, SubRange};
 use forensic_vfs::read::{le_u32, le_u64};
 use forensic_vfs::{
-    Confidence, DynFs, DynSource, FileSystemProbe, FsKind, PathSpec, Registry, SmallHex,
-    SniffWindow, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem,
-    VolumeSystemProbe,
+    Confidence, ContainerDecoder, ContainerFormat, DynFs, DynSource, FileSystemProbe, FsKind,
+    PathSpec, Registry, SmallHex, SniffWindow, VfsError, VfsResult, VolumeDesc, VolumeKind,
+    VolumeScheme, VolumeSystem, VolumeSystemProbe,
 };
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
@@ -94,6 +94,14 @@ impl Vfs {
                 }
             }
         }
+        for cd in self.registry.containers() {
+            if cd.probe(&window).is_candidate() {
+                let decoded = cd.open(source.clone())?;
+                if let Some(fs) = self.resolve(decoded, depth + 1)? {
+                    return Ok(Some(fs));
+                }
+            }
+        }
         Ok(None)
     }
 }
@@ -107,6 +115,7 @@ pub fn default_registry() -> Registry {
         .filesystem(NtfsProbe)
         .volume_system(GptProbe)
         .volume_system(MbrProbe)
+        .container(VhdDecoder)
 }
 
 /// Resolve the base [`DynSource`] for a path. EWF is multi-segment and opens *by
@@ -371,6 +380,43 @@ fn guid_hint(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+/// VHD (Microsoft Virtual Hard Disk) container: a single-stream image with a
+/// `conectix` footer. Decodes to its virtual disk stream via `vhd-core`.
+struct VhdDecoder;
+
+impl ContainerDecoder for VhdDecoder {
+    fn format(&self) -> ContainerFormat {
+        ContainerFormat::Vhd
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        // A dynamic/differencing VHD carries a footer copy ("conectix") at
+        // offset 0; a fixed VHD has it only at the end (and its head sniffs as
+        // the raw filesystem, so a filesystem prober handles that case).
+        if w.has_magic(0, b"conectix") {
+            Confidence::Yes {
+                how: "VHD conectix footer",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynSource> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let reader =
+            vhd::VhdReader::open_reader(Box::new(cursor)).map_err(|e| VfsError::Decode {
+                layer: "vhd",
+                offset: 0,
+                detail: e.to_string(),
+                bytes: SmallHex::new(&[]),
+            })?;
+        let vsize = reader.virtual_disk_size();
+        Ok(Arc::new(SeekPoolSource::single(reader, vsize)))
+    }
 }
 
 #[cfg(test)]
