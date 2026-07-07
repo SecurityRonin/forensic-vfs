@@ -44,3 +44,20 @@ Copied from apfs-forensic/tests/data/apfs_content.bin (Tier-2 self-minted real A
 carve, macOS shasum oracle) and hfsplus-forensic/tests/data/hfs_plus_volume.bin
 (Tier-1, TSK-oracle-validated). Engine end-to-end resolution fixtures for ApfsProbe
 (NXSB@32) and HfsPlusProbe (H+/HX@1024). Ground truth lives in the source repos.
+
+## DMG (Apple UDIF)
+
+`hfsplus.dmg` (MD5 `787b8b16bd9b58a115d22f3c867dbcb8`, ~8.8 KiB) is a Tier-2
+self-minted UDIF disk image whose `koly` trailer sits at `file_len - 512`. It
+wraps a **bare HFS+ volume** (no partition map), so the engine resolves it as
+DMG container → HFS+ filesystem with no volume-system layer — exercising the
+tail sniff window (`SniffWindow::has_magic_from_end(512, b"koly")`). Mint (macOS):
+
+```
+mkdir -p /tmp/vfssrc && printf 'forensic-vfs dmg fixture\n' > /tmp/vfssrc/HELLO.txt
+hdiutil create -srcfolder /tmp/vfssrc -fs HFS+ -volname VFSHFS -layout NONE hfsplus.dmg
+```
+
+Oracle: `hdiutil imageinfo hfsplus.dmg` — **Sector Count 3714** (⇒ virtual disk
+`3714 × 512 = 1,901,568` bytes, matched by `DmgReader::virtual_disk_size()`); the
+root HFS+ directory holds `HELLO.txt`. Used by `open_dmg.rs`.
