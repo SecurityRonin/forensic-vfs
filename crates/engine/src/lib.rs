@@ -170,6 +170,8 @@ pub fn default_registry() -> Registry {
         .filesystem(Iso9660Probe)
         .filesystem(ApfsProbe)
         .filesystem(HfsPlusProbe)
+        .filesystem(ExFatProbe)
+        .filesystem(FatProbe)
         .volume_system(GptProbe)
         .volume_system(MbrProbe)
         .volume_system(ApmProbe)
@@ -359,6 +361,78 @@ impl FileSystemProbe for HfsPlusProbe {
         let n = src.read_at(0, &mut volume)?;
         volume.truncate(n);
         let fs = hfsplus::vfs::HfsFs::new(volume)?;
+        Ok(Arc::new(fs))
+    }
+}
+
+/// exFAT: the `EXFAT   ` identifier at byte offset 3 plus the `0x55AA` boot
+/// signature. Registered before [`FatProbe`] because exFAT zeroes the legacy BPB
+/// fields the FAT probe keys on.
+struct ExFatProbe;
+
+impl FileSystemProbe for ExFatProbe {
+    fn kind(&self) -> FsKind {
+        FsKind::ExFat
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.at(510, 2) == Some(&[0x55, 0xaa]) && w.has_magic(3, b"EXFAT   ") {
+            Confidence::Yes {
+                how: "exFAT boot signature",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynFs> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let fs = fat::FatFs::open(cursor).map_err(|e| VfsError::Decode {
+            layer: "exfat",
+            offset: 0,
+            detail: e.to_string(),
+            bytes: SmallHex::new(&[]),
+        })?;
+        Ok(Arc::new(fs))
+    }
+}
+
+/// FAT12/16/32: a valid BPB — a jump instruction (`0xEB`/`0xE9`) at offset 0, a
+/// power-of-two bytes-per-sector, and the `0x55AA` boot signature.
+struct FatProbe;
+
+impl FileSystemProbe for FatProbe {
+    fn kind(&self) -> FsKind {
+        FsKind::Fat
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.at(510, 2) != Some(&[0x55, 0xaa]) {
+            return Confidence::No;
+        }
+        let jump = w.at(0, 1).and_then(|s| s.first().copied());
+        let jump_ok = matches!(jump, Some(0xEB | 0xE9));
+        let bps = w
+            .at(11, 2)
+            .and_then(|b| <[u8; 2]>::try_from(b).ok())
+            .map_or(0, u16::from_le_bytes);
+        if jump_ok && bps.is_power_of_two() && (512..=4096).contains(&bps) {
+            Confidence::Yes { how: "FAT BPB" }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynFs> {
+        let len = src.len();
+        let cursor = SourceCursor::new(src, 0, len);
+        let fs = fat::FatFs::open(cursor).map_err(|e| VfsError::Decode {
+            layer: "fat",
+            offset: 0,
+            detail: e.to_string(),
+            bytes: SmallHex::new(&[]),
+        })?;
         Ok(Arc::new(fs))
     }
 }
@@ -1226,6 +1300,25 @@ mod tests {
                 how: "HFS+/HFSX volume header"
             }
         );
+    }
+
+    #[test]
+    fn fat_and_exfat_magic_but_garbage_are_loud_errors() {
+        // exFAT identifier + boot signature, but no valid structure -> loud error.
+        let mut x = vec![0u8; 4096];
+        x[3..11].copy_from_slice(b"EXFAT   ");
+        x[510] = 0x55;
+        x[511] = 0xaa;
+        assert!(Vfs::new().open_source(mem(x)).is_err());
+
+        // A plausible FAT BPB (jump + 512 bytes/sector + 0x55AA) over garbage ->
+        // FatProbe says Yes, then FatFs::open fails loudly, never a silent None.
+        let mut f = vec![0u8; 4096];
+        f[0] = 0xEB;
+        f[11..13].copy_from_slice(&512u16.to_le_bytes());
+        f[510] = 0x55;
+        f[511] = 0xaa;
+        assert!(Vfs::new().open_source(mem(f)).is_err());
     }
 
     #[test]
