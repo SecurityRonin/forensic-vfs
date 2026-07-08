@@ -172,6 +172,7 @@ pub fn default_registry() -> Registry {
         .filesystem(HfsPlusProbe)
         .volume_system(GptProbe)
         .volume_system(MbrProbe)
+        .volume_system(ApmProbe)
         .container(VhdDecoder)
         .container(Qcow2Decoder)
         .container(VmdkDecoder)
@@ -566,6 +567,141 @@ impl VolumeSystem for Gpt {
     }
 }
 
+/// Apple Partition Map (APM): a Driver Descriptor Record (`ER`) in block 0 and a
+/// chain of 512-byte partition-map entries (`PM`) from block 1. All big-endian.
+struct ApmProbe;
+
+impl VolumeSystemProbe for ApmProbe {
+    fn scheme(&self) -> VolumeScheme {
+        VolumeScheme::Apm
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        // DDR 'ER' at block 0 and the first partition-map entry 'PM' at block 1
+        // (512-byte blocks — the case for every fixed-disk APM).
+        if w.has_magic(0, b"ER") && w.has_magic(512, b"PM") {
+            Confidence::Yes {
+                how: "Apple Partition Map",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<Box<dyn VolumeSystem>> {
+        Ok(Box::new(Apm::parse(src)?))
+    }
+}
+
+struct Apm {
+    parent: DynSource,
+    volumes: Vec<VolumeDesc>,
+}
+
+impl Apm {
+    fn parse(src: DynSource) -> VfsResult<Self> {
+        // Driver Descriptor Record: block size at offset 2 (default 512).
+        let mut ddr = [0u8; 512];
+        src.read_at(0, &mut ddr)?;
+        let bs = be_u16(&ddr, 2);
+        let block_size: u64 = if bs.is_power_of_two() && (512..=4096).contains(&bs) {
+            u64::from(bs)
+        } else {
+            512
+        };
+
+        // The first entry's pmMapBlkCnt gives the entry count; cap it as an
+        // allocation/loop-bomb guard.
+        let mut first = [0u8; 512];
+        src.read_at(block_size, &mut first)?;
+        let count = be_u32(&first, 4).min(256) as usize;
+
+        let mut volumes = Vec::new();
+        for i in 0..count {
+            let mut entry = [0u8; 512];
+            if src.read_at((i as u64 + 1) * block_size, &mut entry)? < 512 {
+                break;
+            }
+            if &entry[0..2] != b"PM" {
+                break;
+            }
+            let ptype = apm_string(&entry, 0x30);
+            // Skip the map itself and free/unused space; keep data partitions.
+            if ptype.eq_ignore_ascii_case("Apple_partition_map")
+                || ptype.eq_ignore_ascii_case("Apple_Free")
+                || ptype.eq_ignore_ascii_case("Apple_Void")
+            {
+                continue;
+            }
+            let start = u64::from(be_u32(&entry, 8)) * block_size;
+            let len = u64::from(be_u32(&entry, 0x0c)) * block_size;
+            let name = apm_string(&entry, 0x10);
+            volumes.push(VolumeDesc {
+                index: i,
+                kind: VolumeKind::Partition,
+                start,
+                len,
+                type_hint: Some(ptype),
+                label: (!name.is_empty()).then_some(name),
+            });
+        }
+
+        Ok(Self {
+            parent: src,
+            volumes,
+        })
+    }
+}
+
+impl VolumeSystem for Apm {
+    fn scheme(&self) -> VolumeScheme {
+        VolumeScheme::Apm
+    }
+
+    fn volumes(&self) -> &[VolumeDesc] {
+        &self.volumes
+    }
+
+    fn open_volume(&self, index: usize) -> VfsResult<DynSource> {
+        let desc = self.volumes.get(index).ok_or(VfsError::OutOfRange {
+            what: "apm volume index",
+            offset: index as u64,
+            len: 1,
+            bound: self.volumes.len() as u64,
+        })?;
+        Ok(Arc::new(SubRange::new(
+            self.parent.clone(),
+            desc.start,
+            desc.len,
+        )))
+    }
+}
+
+/// Big-endian `u16` at `off`, 0 out of range (never panics).
+fn be_u16(data: &[u8], off: usize) -> u16 {
+    let mut b = [0u8; 2];
+    if let Some(s) = data.get(off..off + 2) {
+        b.copy_from_slice(s);
+    }
+    u16::from_be_bytes(b)
+}
+
+/// Big-endian `u32` at `off`, 0 out of range (never panics).
+fn be_u32(data: &[u8], off: usize) -> u32 {
+    let mut b = [0u8; 4];
+    if let Some(s) = data.get(off..off + 4) {
+        b.copy_from_slice(s);
+    }
+    u32::from_be_bytes(b)
+}
+
+/// A null-terminated ASCII string from a 32-byte APM name/type field.
+fn apm_string(entry: &[u8], off: usize) -> String {
+    let field = entry.get(off..off + 32).unwrap_or(&[]);
+    let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+    String::from_utf8_lossy(&field[..end]).into_owned()
+}
+
 fn guid_hint(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -910,6 +1046,47 @@ mod tests {
         assert_eq!(m.volumes().len(), 1);
         assert!(m.open_volume(0).is_ok());
         assert!(m.open_volume(9).is_err());
+    }
+
+    #[test]
+    fn apm_parse_edges() {
+        // A 512-byte partition-map entry.
+        fn pm(map_cnt: u32, pstart: u32, pcnt: u32, ptype: &str) -> Vec<u8> {
+            let mut e = vec![0u8; 512];
+            e[0..2].copy_from_slice(b"PM");
+            e[4..8].copy_from_slice(&map_cnt.to_be_bytes());
+            e[8..12].copy_from_slice(&pstart.to_be_bytes());
+            e[0x0c..0x10].copy_from_slice(&pcnt.to_be_bytes());
+            e[0x30..0x30 + ptype.len()].copy_from_slice(ptype.as_bytes());
+            e
+        }
+
+        // sbBlkSize=0 → the default-512 branch; the map entry is skipped, leaving
+        // one Apple_HFS data partition. Exercises scheme()/open_volume bounds.
+        let mut img = vec![0u8; 512];
+        img[0..2].copy_from_slice(b"ER");
+        img.extend(pm(2, 1, 63, "Apple_partition_map"));
+        img.extend(pm(2, 4, 2, "Apple_HFS"));
+        img.extend(vec![0u8; 4 * 512]);
+        let apm = Apm::parse(mem(img)).unwrap();
+        assert_eq!(apm.scheme(), VolumeScheme::Apm);
+        assert_eq!(apm.volumes().len(), 1);
+        assert!(apm.open_volume(0).is_ok());
+        assert!(apm.open_volume(9).is_err());
+
+        // A non-'PM' entry where the count claims more → the scan breaks.
+        let mut img2 = vec![0u8; 512];
+        img2[0..2].copy_from_slice(b"ER");
+        img2[2..4].copy_from_slice(&512u16.to_be_bytes());
+        img2.extend(pm(2, 4, 2, "Apple_HFS"));
+        img2.extend(vec![0u8; 512]); // block 2 is not 'PM'
+        assert_eq!(Apm::parse(mem(img2)).unwrap().volumes().len(), 1);
+
+        // A high map count with a source that ends early → the short-read breaks.
+        let mut img3 = vec![0u8; 512];
+        img3[0..2].copy_from_slice(b"ER");
+        img3.extend(pm(10, 4, 2, "Apple_HFS"));
+        assert_eq!(Apm::parse(mem(img3)).unwrap().volumes().len(), 1);
     }
 
     #[test]
