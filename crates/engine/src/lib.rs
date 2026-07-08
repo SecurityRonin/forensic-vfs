@@ -14,9 +14,10 @@ use forensic_vfs::read::{le_u32, le_u64};
 use forensic_vfs::{
     Confidence, ContainerDecoder, ContainerFormat, DynFs, DynSource, FileId, FileSystem,
     FileSystemProbe, FsKind, FsMeta, Layer, NodeAddr, NodeKind, PathSpec, Registry, SmallHex,
-    SniffWindow, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem,
-    VolumeSystemProbe,
+    SnapshotRef, SniffWindow, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme,
+    VolumeSystem, VolumeSystemProbe,
 };
+use state_history_forensic::epoch::EpochTag;
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
 const MAX_DEPTH: usize = 8;
@@ -68,9 +69,9 @@ impl Vfs {
         let base = open_base(path)?;
         let base_spec = PathSpec::os(path);
         match self.resolve(base, base_spec.clone(), 0)? {
-            Some((fs, spec)) => Ok(Evidence {
-                root: spec,
-                fs: Some(fs),
+            Some(r) => Ok(Evidence {
+                root: r.spec,
+                fs: Some(r.fs),
             }),
             None => Ok(Evidence {
                 root: base_spec,
@@ -86,7 +87,7 @@ impl Vfs {
             start: 0,
             len: source.len(),
         });
-        Ok(self.resolve(source, base, 0)?.map(|(fs, _spec)| fs))
+        Ok(self.resolve(source, base, 0)?.map(|r| r.fs))
     }
 
     /// Recursively resolve a source to a filesystem: sniff its head; if a
@@ -97,7 +98,7 @@ impl Vfs {
         source: DynSource,
         spec: PathSpec,
         depth: usize,
-    ) -> VfsResult<Option<(DynFs, PathSpec)>> {
+    ) -> VfsResult<Option<Resolved>> {
         if depth > MAX_DEPTH {
             return Ok(None);
         }
@@ -121,11 +122,16 @@ impl Vfs {
         for probe in self.registry.filesystems() {
             if probe.probe(&window).is_candidate() {
                 let fs = probe.open(source.clone())?;
-                let spec = spec.push(Layer::Fs {
+                let fs_spec = spec.clone().push(Layer::Fs {
                     kind: probe.kind(),
                     at: NodeAddr::Path(Vec::new()),
                 });
-                return Ok(Some((fs, spec)));
+                return Ok(Some(Resolved {
+                    fs,
+                    spec: fs_spec,
+                    source,
+                    source_spec: spec,
+                }));
             }
         }
         for vsp in self.registry.volume_systems() {
@@ -156,6 +162,156 @@ impl Vfs {
             }
         }
         Ok(None)
+    }
+
+    /// Enumerate an APFS volume's snapshots as a time-indexed `[H]` cohort. The
+    /// path is resolved through any container/volume-system nesting to its APFS
+    /// filesystem (exactly as [`Vfs::open`] does), then apfs-core lists the
+    /// snapshot-metadata tree. Evidence with no APFS filesystem yields an **empty**
+    /// cohort — a genuinely clean "no APFS snapshots here", not an error.
+    ///
+    /// The returned cohort is a `Vec<SnapshotView>` (the list form of the richer
+    /// `state_history_forensic::TemporalCohort<H>`, adopted here once the generic
+    /// `HistoricalSource` wiring lands); each view carries an [`EpochTag`] derived
+    /// from the snapshot's `create_time` and a re-openable [`PathSpec`] locator.
+    ///
+    /// # Errors
+    /// The bootstrap/decoding errors of resolving the path, or an apfs-core decode
+    /// failure while walking the snapshot-metadata tree.
+    pub fn snapshots(&self, path: &Path) -> VfsResult<Vec<SnapshotView>> {
+        let base = open_base(path)?;
+        let base_spec = PathSpec::os(path);
+        let Some(resolved) = self.resolve(base, base_spec, 0)? else {
+            return Ok(Vec::new());
+        };
+        if !is_apfs(&resolved.spec) {
+            return Ok(Vec::new());
+        }
+        let source_spec = resolved.source_spec;
+        let len = resolved.source.len();
+        let cursor = SourceCursor::new(resolved.source, 0, len);
+        let snaps = apfs_core::vfs::ApfsFs::snapshots(cursor).map_err(map_apfs_err)?;
+        Ok(snaps
+            .into_iter()
+            .map(|s| snapshot_view(&source_spec, s.xid, s.name, s.create_time))
+            .collect())
+    }
+
+    /// Re-mount one APFS snapshot by its transaction `xid` — the end-to-end
+    /// counterpart to a [`SnapshotView`] locator. Resolves the path to its APFS
+    /// filesystem, then mounts the volume state frozen at `xid` (the live volume
+    /// for its own xid, else the retained snapshot). The returned [`Evidence`]
+    /// carries the snapshot-topped locator and the mounted point-in-time
+    /// filesystem.
+    ///
+    /// # Errors
+    /// [`VfsError::Bootstrap`] if the path resolves to no filesystem;
+    /// [`VfsError::Unsupported`] if the resolved filesystem is not APFS; or an
+    /// apfs-core decode failure (including [`VfsError::Decode`] for an unknown
+    /// `xid`).
+    pub fn open_snapshot(&self, path: &Path, xid: u64) -> VfsResult<Evidence> {
+        let base = open_base(path)?;
+        let base_spec = PathSpec::os(path);
+        let resolved = self
+            .resolve(base, base_spec, 0)?
+            .ok_or(VfsError::Bootstrap {
+                stage: "apfs snapshot",
+                detail: "no filesystem detected in evidence".to_string(),
+            })?;
+        if !is_apfs(&resolved.spec) {
+            return Err(VfsError::Unsupported {
+                layer: "snapshot",
+                scheme: "non-APFS filesystem has no APFS snapshot".to_string(),
+            });
+        }
+        let source_spec = resolved.source_spec;
+        let len = resolved.source.len();
+        let cursor = SourceCursor::new(resolved.source, 0, len);
+        let fs = apfs_core::vfs::ApfsFs::open_snapshot(cursor, xid).map_err(map_apfs_err)?;
+        let root = source_spec
+            .push(Layer::Snapshot {
+                store: SnapshotRef::ApfsXid(xid),
+            })
+            .push(Layer::Fs {
+                kind: FsKind::Apfs,
+                at: NodeAddr::Path(Vec::new()),
+            });
+        Ok(Evidence {
+            root,
+            fs: Some(Arc::new(fs)),
+        })
+    }
+}
+
+/// One resolved layer stack: the mounted filesystem, its locator, and the byte
+/// source it was mounted from (plus that source's pre-filesystem locator, the
+/// base a snapshot layer is pushed onto).
+struct Resolved {
+    fs: DynFs,
+    spec: PathSpec,
+    source: DynSource,
+    source_spec: PathSpec,
+}
+
+/// One snapshot of an APFS volume, viewed as a time-indexed state in the `[H]`
+/// cohort: the wall-clock [`EpochTag`], the APFS transaction id, the snapshot
+/// name, and a re-openable [`PathSpec`] locator (base ⇒ `Snapshot{ApfsXid}`).
+#[derive(Debug, Clone)]
+pub struct SnapshotView {
+    /// Time-indexed identity, derived from the snapshot's `create_time`.
+    pub epoch: EpochTag,
+    /// The APFS snapshot transaction id.
+    pub xid: u64,
+    /// The snapshot name.
+    pub name: String,
+    /// A locator that [`Vfs::open_snapshot`] re-opens end-to-end.
+    pub locator: PathSpec,
+}
+
+/// True when a resolved locator's top layer is an APFS filesystem.
+fn is_apfs(spec: &PathSpec) -> bool {
+    matches!(
+        spec.layer,
+        Layer::Fs {
+            kind: FsKind::Apfs,
+            ..
+        }
+    )
+}
+
+/// Build a [`SnapshotView`] under `source_spec` (the APFS source's
+/// pre-filesystem locator) from a snapshot's transaction id, name, and
+/// `create_time`. Takes primitives rather than the `#[non_exhaustive]`
+/// `apfs_core::snapshot::Snapshot` so the mapping is unit-testable directly.
+fn snapshot_view(source_spec: &PathSpec, xid: u64, name: String, create_time: u64) -> SnapshotView {
+    SnapshotView {
+        epoch: epoch_from_create_time(create_time),
+        xid,
+        name,
+        locator: source_spec.clone().push(Layer::Snapshot {
+            store: SnapshotRef::ApfsXid(xid),
+        }),
+    }
+}
+
+/// Derive an [`EpochTag`] from an APFS snapshot `create_time` (nanoseconds since
+/// 1970-01-01 UTC). The big-endian nanosecond timestamp occupies the low 8 bytes
+/// (indices 24..32) of the 32-byte tag; the rest is zero. This is simple and
+/// reversible — the timestamp round-trips back out of those 8 bytes — and orders
+/// correctly: a later `create_time` yields a lexicographically greater tag.
+fn epoch_from_create_time(create_time_ns: u64) -> EpochTag {
+    let mut bytes = [0u8; 32];
+    bytes[24..32].copy_from_slice(&create_time_ns.to_be_bytes());
+    EpochTag::from_bytes(bytes)
+}
+
+/// Map an apfs-core error into a VFS decode error, keeping the original message.
+fn map_apfs_err(e: apfs_core::ApfsError) -> VfsError {
+    VfsError::Decode {
+        layer: "apfs snapshot",
+        offset: 0,
+        detail: e.to_string(),
+        bytes: SmallHex::new(&[]),
     }
 }
 
@@ -1306,5 +1462,130 @@ mod tests {
 
         // test helper: a read starting past the end returns 0
         assert_eq!(Mem(vec![1, 2, 3]).read_at(99, &mut [0u8; 4]).unwrap(), 0);
+    }
+
+    // --- APFS snapshot cohort ([H] wiring) ---
+
+    const APFS_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/apfs_volume.bin");
+    const EXT4_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ext4.img");
+
+    /// The committed P4 fixture's live volume transaction id, resolved through the
+    /// public apfs-core container API (the fixture has zero snapshots, so the live
+    /// xid is the only mountable point in the timeline).
+    fn apfs_live_xid() -> u64 {
+        use std::io::{Read, Seek, SeekFrom};
+        let bytes = std::fs::read(APFS_FIXTURE).unwrap();
+        let mut c = apfs_core::ApfsContainer::open(std::io::Cursor::new(bytes)).unwrap();
+        let bs = u64::from(c.superblock().block_size);
+        let vaddr = c.volume_superblock_addrs().unwrap()[0];
+        let mut r = c.into_reader();
+        r.seek(SeekFrom::Start(vaddr * bs)).unwrap();
+        let mut buf = vec![0u8; bs as usize];
+        r.read_exact(&mut buf).unwrap();
+        apfs_core::volume::ApfsVolume::parse(&buf).unwrap().xid()
+    }
+
+    fn zeros_file() -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(&[0u8; 4096]).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    #[test]
+    fn epoch_from_create_time_round_trips_and_orders() {
+        let t = 0x0123_4567_89ab_cdefu64;
+        let tag = epoch_from_create_time(t);
+        assert_eq!(&tag.0[0..24], &[0u8; 24], "high 24 bytes are zero");
+        assert_eq!(
+            u64::from_be_bytes(tag.0[24..32].try_into().unwrap()),
+            t,
+            "create_time round-trips out of the low 8 bytes"
+        );
+        assert!(
+            epoch_from_create_time(t + 1).0 > tag.0,
+            "a later create_time yields a greater tag"
+        );
+    }
+
+    #[test]
+    fn snapshot_view_carries_epoch_and_snapshot_locator() {
+        let base = PathSpec::os("/ev.dmg");
+        let v = snapshot_view(&base, 42, "daily".to_string(), 1000);
+        assert_eq!(v.xid, 42);
+        assert_eq!(v.name, "daily");
+        assert_eq!(v.epoch, epoch_from_create_time(1000));
+        assert!(matches!(
+            v.locator.layer,
+            Layer::Snapshot {
+                store: SnapshotRef::ApfsXid(42)
+            }
+        ));
+    }
+
+    #[test]
+    fn snapshots_on_unrecognized_source_is_empty() {
+        let f = zeros_file();
+        assert!(Vfs::new().snapshots(f.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn snapshots_on_non_apfs_filesystem_is_empty() {
+        // ext4 mounts fine but is not APFS -> an empty cohort, never an error.
+        assert!(Vfs::new()
+            .snapshots(Path::new(EXT4_FIXTURE))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn open_snapshot_without_filesystem_is_bootstrap_error() {
+        let f = zeros_file();
+        assert!(matches!(
+            Vfs::new().open_snapshot(f.path(), 1),
+            Err(VfsError::Bootstrap { .. })
+        ));
+    }
+
+    #[test]
+    fn open_snapshot_on_non_apfs_is_unsupported() {
+        assert!(matches!(
+            Vfs::new().open_snapshot(Path::new(EXT4_FIXTURE), 1),
+            Err(VfsError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn open_snapshot_unknown_xid_is_a_loud_decode_error() {
+        // A xid that is neither the live volume's nor a retained snapshot's ->
+        // apfs-core SnapshotNotFound, surfaced as a VFS decode error.
+        let bogus = apfs_live_xid().wrapping_add(0xDEAD_BEEF);
+        assert!(matches!(
+            Vfs::new().open_snapshot(Path::new(APFS_FIXTURE), bogus),
+            Err(VfsError::Decode { .. })
+        ));
+    }
+
+    #[test]
+    fn open_snapshot_at_live_xid_mounts_and_walks() {
+        let ev = Vfs::new()
+            .open_snapshot(Path::new(APFS_FIXTURE), apfs_live_xid())
+            .expect("open live-xid snapshot");
+        let uri = ev.root.to_uri();
+        assert!(
+            uri.contains("snapshot:apfs") && uri.contains("fs:apfs"),
+            "locator names the snapshot + APFS layers: {uri}"
+        );
+        let fs = ev.fs.expect("snapshot mounts a filesystem");
+        let names: Vec<String> = walk(fs.as_ref())
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| {
+                e.path
+                    .last()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+            })
+            .collect();
+        assert!(names.iter().any(|n| n == "plain.txt"), "walk: {names:?}");
     }
 }

@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 forensic-vfs = "0.1"
+# KNOWLEDGE [H] state-history vocabulary — EpochTag for the snapshot cohort.
+state-history-forensic = { path = "../../../state-history-forensic" }
 ewf       = { path = "../../../ewf-forensic/core", features = ["vfs"] }
 ntfs-core = { path = "../../../ntfs-forensic/core", features = ["vfs"] }
 ext4fs    = { package = "ext4fs-core", path = "../../../ext4fs-forensic/ext4fs-core", features = ["vfs"] }
