@@ -146,6 +146,7 @@ fn crypto_token(s: CryptoScheme) -> &'static str {
         CryptoScheme::Luks2 => "luks2",
         CryptoScheme::FileVault => "filevault",
         CryptoScheme::ApfsEncrypted => "apfsencrypted",
+        CryptoScheme::VeraCrypt => "veracrypt",
     }
 }
 fn parse_crypto(t: &str, ctx: &str) -> VfsResult<CryptoScheme> {
@@ -155,6 +156,7 @@ fn parse_crypto(t: &str, ctx: &str) -> VfsResult<CryptoScheme> {
         "luks2" => CryptoScheme::Luks2,
         "filevault" => CryptoScheme::FileVault,
         "apfsencrypted" => CryptoScheme::ApfsEncrypted,
+        "veracrypt" => CryptoScheme::VeraCrypt,
         _ => return Err(err("unknown crypto scheme", ctx)),
     })
 }

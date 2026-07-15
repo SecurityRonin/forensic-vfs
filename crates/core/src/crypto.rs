@@ -18,6 +18,8 @@ pub enum CryptoScheme {
     Luks2,
     FileVault,
     ApfsEncrypted,
+    /// VeraCrypt / TrueCrypt full-volume encryption (XTS, optional cipher cascade).
+    VeraCrypt,
 }
 
 /// One credential offered to a crypto layer.
