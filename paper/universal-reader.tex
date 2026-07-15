@@ -20,7 +20,7 @@
 
 \title{\bfseries A Universal Positioned-Read Contract for Forensic Evidence:\\
 Block-by-Block Filesystem Decoding over Compressed Images,\\
-with a Panic-Free Parsing Substrate}
+with an Input-Fuzzed Parsing Substrate}
 
 \ifblind
   \author{}
@@ -115,7 +115,7 @@ that fall out of its shape.
   validate read correctness against The Sleuth Kit; we are explicit that the
   resident-memory figure is an analytical bound, not yet a benchmark
   (\S\ref{sec:eval}).
-  \item \textbf{\texttt{safe-read}, a panic-free parsing substrate}
+  \item \textbf{\texttt{safe-read}, a panic-free-by-construction parsing substrate}
   (\S\ref{sec:saferead}): a \texttt{no\_std}, zero-dependency, fuzzed crate whose
   bounded integer readers return $0$ on any out-of-range offset and never panic.
   Consolidating $\sim$10 hand-rolled copies onto it surfaced a reachable
