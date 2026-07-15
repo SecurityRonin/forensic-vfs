@@ -323,6 +323,7 @@ pub fn default_registry() -> Registry {
     Registry::new()
         .filesystem(NtfsProbe)
         .filesystem(Ext4Probe)
+        .filesystem(XfsProbe)
         .filesystem(Iso9660Probe)
         .filesystem(ApfsProbe)
         .filesystem(HfsPlusProbe)
@@ -421,6 +422,25 @@ impl FileSystemProbe for Ext4Probe {
             bytes: SmallHex::new(&[]),
         })?;
         Ok(Arc::new(fs))
+    }
+}
+
+/// XFS filesystem prober: recognizes the `XFSB` superblock magic at byte 0 and
+/// mounts `xfs::vfs::XfsFs`. XfsFs is slice-based, so `open` reads the whole
+/// source into memory (see the xfs vfs adapter docs on the `&[u8]` bridge).
+struct XfsProbe;
+
+impl FileSystemProbe for XfsProbe {
+    fn kind(&self) -> FsKind {
+        FsKind::Xfs
+    }
+
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        xfs::vfs::xfs_probe(w)
+    }
+
+    fn open(&self, src: DynSource) -> VfsResult<DynFs> {
+        Ok(Arc::new(xfs::vfs::XfsFs::open(&src)?))
     }
 }
 
