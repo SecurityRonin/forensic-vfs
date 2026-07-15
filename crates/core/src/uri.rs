@@ -162,6 +162,7 @@ fn fs_token(k: FsKind) -> &'static str {
     match k {
         FsKind::Ntfs => "ntfs",
         FsKind::Ext => "ext",
+        FsKind::Xfs => "xfs",
         FsKind::HfsPlus => "hfsplus",
         FsKind::Apfs => "apfs",
         FsKind::Iso9660 => "iso9660",
@@ -175,6 +176,7 @@ fn parse_fs_kind(t: &str, ctx: &str) -> VfsResult<FsKind> {
     Ok(match t {
         "ntfs" => FsKind::Ntfs,
         "ext" => FsKind::Ext,
+        "xfs" => FsKind::Xfs,
         "hfsplus" => FsKind::HfsPlus,
         "apfs" => FsKind::Apfs,
         "iso9660" => FsKind::Iso9660,
@@ -625,6 +627,30 @@ mod tests {
             kind: FsKind::Iso9660,
             at: NodeAddr::Path(vec![]),
         }));
+    }
+
+    #[test]
+    fn every_fs_kind_token_round_trips() {
+        // Every FsKind must survive to_uri -> from_uri (the fs_token /
+        // parse_fs_kind pair). XFS is the newest variant; a missing token there
+        // would fail this round-trip.
+        for kind in [
+            FsKind::Ntfs,
+            FsKind::Ext,
+            FsKind::Xfs,
+            FsKind::HfsPlus,
+            FsKind::Apfs,
+            FsKind::Iso9660,
+            FsKind::Udf,
+            FsKind::Fat,
+            FsKind::ExFat,
+            FsKind::Other,
+        ] {
+            roundtrip(&PathSpec::os("/x").push(Layer::Fs {
+                kind,
+                at: NodeAddr::Path(vec![b"a".to_vec()]),
+            }));
+        }
     }
 
     #[test]

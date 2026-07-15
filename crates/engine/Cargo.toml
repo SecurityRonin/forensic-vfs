@@ -14,6 +14,7 @@ state-history-forensic = { path = "../../../state-history-forensic" }
 ewf       = { path = "../../../ewf-forensic/core", features = ["vfs"] }
 ntfs-core = { path = "../../../ntfs-forensic/core", features = ["vfs"] }
 ext4fs    = { package = "ext4fs-core", path = "../../../ext4fs-forensic/ext4fs-core", features = ["vfs"] }
+xfs       = { package = "xfs-core", path = "../../../xfs-forensic/core", features = ["vfs"] }
 iso       = { package = "iso9660-forensic", path = "../../../iso9660-forensic/iso", features = ["vfs"] }
 apfs-core = { path = "../../../apfs-forensic/core", features = ["vfs"] }
 hfsplus   = { package = "hfsplus-forensic", path = "../../../hfsplus-forensic", features = ["vfs"] }

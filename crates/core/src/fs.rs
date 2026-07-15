@@ -302,6 +302,7 @@ impl Iterator for NodeStream {
 pub enum FsKind {
     Ntfs,
     Ext,
+    Xfs,
     HfsPlus,
     Apfs,
     Iso9660,
