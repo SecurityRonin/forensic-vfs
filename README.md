@@ -12,7 +12,7 @@
 
 **One read-only, positioned-read byte edge — `ImageSource` — that every disk, container, and filesystem reader in the fleet speaks, so a whole evidence stack (`E01 → GPT → BitLocker → NTFS`) composes as a single `Arc<dyn ImageSource>` that N workers read in parallel and no code path can write.**
 
-`forensic-vfs` is the KNOWLEDGE-leaf contract crate of the universal forensic VFS. It defines the layered model — byte source, volume system, crypto layer, filesystem, and the recursive `PathSpec` locator — and nothing else: no format parsing, no reader dependencies. Readers implement these traits; the engine (`forensic-vfs-engine`) and the `disk4n6` CLI compose them.
+`forensic-vfs` is the KNOWLEDGE-leaf contract crate of the universal forensic VFS. It defines the layered model — byte source, volume system, crypto layer, filesystem, and the recursive `PathSpec` locator — and nothing else: no format parsing, no reader dependencies. Readers implement these traits; the engine (`crates/engine`) and the `disk4n6` CLI compose them.
 
 ## The one decision that shapes everything
 
@@ -68,15 +68,22 @@ Every byte outside `[A-Za-z0-9._-]` is percent-encoded, so a Windows path contai
 
 ## Where this fits
 
-`forensic-vfs` realizes Phase 1 of the universal forensic VFS. The layers above it are in development:
+`forensic-vfs` is the contract crate. Readers implement its traits behind a `vfs`
+feature; the engine (`crates/engine`) composes them. Verified coverage (2026-07):
 
-| Crate | Role | Status |
+| Layer | Contract | Production impls |
 |---|---|---|
-| **`forensic-vfs`** | byte source, volume/crypto/filesystem traits, `PathSpec` | this crate |
-| `forensic-vfs-engine` | registry + graph resolver over every reader | planned |
-| `disk-forensic` / `disk4n6` | thin CLI over the engine | evolving |
+| Containers | `ImageSource` | ewf (E01), qcow2, vmdk, vhdx, dmg — **5** |
+| Filesystems / archives | `FileSystem` | ntfs, fat, ext4, apfs, hfsplus, xfs, iso9660, udf, zip, ad1, dar — **11** |
+| Volumes | `VolumeSystem` | *none yet* (mbr/gpt/apm crates exist, unwired) |
+| Crypto | `CryptoLayer` | *none yet* (bitlocker/luks/filevault/veracrypt exist, unwired) |
 
-See the design in [`disk-forensic`](https://github.com/SecurityRonin/disk-forensic/blob/main/docs/design/2026-07-06-universal-forensic-vfs.md).
+The horizontal layers are strong; the two vertical layers are the frontier. Full
+architecture, the exact coverage matrix, and the design decisions:
+
+- [`docs/PRD.md`](docs/PRD.md) — reverse-written requirements + coverage matrix + remaining work
+- [`docs/decisions/`](docs/decisions/) — ADRs (positioned-read, feature-gating, composition, …)
+- [`paper/`](paper/) — the academic write-up (universal reader + safe-read + block-by-block E01/MFT decode)
 
 ---
 
