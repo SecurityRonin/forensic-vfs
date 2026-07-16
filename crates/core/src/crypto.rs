@@ -45,7 +45,7 @@ pub trait CredentialSource: Send + Sync {
     fn credentials_for(&self, scheme: CryptoScheme, target: &str) -> Vec<Credential>;
 }
 
-/// A cryptographic translation over one [`ImageSource`]: consumes credentials +
+/// A cryptographic translation over one [`crate::ImageSource`]: consumes credentials +
 /// ciphertext sectors, presents a decrypted [`DynSource`].
 pub trait CryptoLayer: Send + Sync {
     fn scheme(&self) -> CryptoScheme;

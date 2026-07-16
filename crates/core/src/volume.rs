@@ -1,4 +1,4 @@
-//! [`VolumeSystem`] — a partitioning/volume scheme over one [`ImageSource`].
+//! [`VolumeSystem`] — a partitioning/volume scheme over one [`crate::ImageSource`].
 //!
 //! MBR/GPT/APM partitions and snapshot store-sets (VSS, APFS container) are all
 //! volume systems: `volumes()` are partitions *or* stores/snapshots — the
@@ -43,7 +43,7 @@ pub struct VolumeDesc {
     pub label: Option<String>,
 }
 
-/// A partitioning/volume scheme over one [`ImageSource`]. `&self` throughout.
+/// A partitioning/volume scheme over one [`crate::ImageSource`]. `&self` throughout.
 pub trait VolumeSystem: Send + Sync {
     fn scheme(&self) -> VolumeScheme;
     /// The volumes/stores this scheme exposes.
