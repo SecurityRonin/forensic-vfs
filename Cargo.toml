@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/engine"]
+members = ["crates/core"]
 
 # Single source of truth for fields shared by every member (DRY): bump version /
 # MSRV / license here once; members inherit via `field.workspace = true`.
@@ -23,6 +23,9 @@ forensicnomicon-core = "1.2"
 # these traits does not inherit the full forensicnomicon facade (the true-leaf
 # rule, design §4).
 forensicnomicon = "1"
+# KNOWLEDGE [H] state-history vocabulary — `EpochTag`, carried by `SnapshotView`.
+# Zero-dep KNOWLEDGE-tier leaf, so a non-optional dep keeps the leaf/lean rule.
+state-history-forensic = "0.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -39,9 +42,3 @@ doc_markdown             = "allow"
 cast_possible_truncation = "allow"
 cast_possible_wrap       = "allow"
 cast_sign_loss           = "allow"
-
-# feat/engine WIP: the engine + the external reader path-deps all resolve
-# forensic-vfs to THIS workspace's leaf, so their trait impls unify. Branch-only;
-# main has no engine member and no patch.
-[patch.crates-io]
-forensic-vfs = { path = "crates/core" }

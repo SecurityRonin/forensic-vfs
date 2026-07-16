@@ -9,6 +9,3 @@ Thumbs.db
 /site
 fuzz/target
 fuzz/corpus
-crates/engine/fuzz/target
-crates/engine/fuzz/corpus
-crates/engine/fuzz/artifacts

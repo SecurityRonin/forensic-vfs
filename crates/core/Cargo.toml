@@ -30,6 +30,8 @@ serde                = { workspace = true, optional = true }
 # The canonical FsKind newtype — zero-dep, so a non-optional leaf dep.
 forensicnomicon-core = { workspace = true }
 forensicnomicon      = { workspace = true, optional = true }
+# EpochTag for SnapshotView — zero-dep KNOWLEDGE-tier leaf.
+state-history-forensic = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

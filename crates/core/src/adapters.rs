@@ -368,4 +368,100 @@ mod tests {
         assert_eq!(src.read_at(254, &mut b2).unwrap(), 2);
         assert_eq!(b2, [254, 255]);
     }
+
+    #[test]
+    fn seek_pool_short_read_breaks_at_eof() {
+        use std::io::Cursor;
+        // The pool advertises 32 bytes but the cursor only has 4: a read of the
+        // full window fills 4 then the inner Read returns 0 -> the fill loop
+        // breaks at EOF rather than spinning.
+        let pool = SeekPoolSource::single(Cursor::new(vec![1u8, 2, 3, 4]), 32);
+        let mut buf = [0u8; 16];
+        assert_eq!(pool.read_at(0, &mut buf).unwrap(), 4);
+        assert_eq!(&buf[..4], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn seek_pool_checkout_blocks_when_the_only_cursor_is_busy() {
+        use std::io::{self, Read, Seek, SeekFrom};
+        use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+        use std::sync::{Arc, Mutex};
+
+        // A reader whose first read signals "I am inside read (holding the pool
+        // guard)" then waits for a go-ahead before returning — so a concurrent
+        // read_at deterministically finds try_lock failing and must fall through
+        // to the blocking .first().lock() path (checkout's contention arm).
+        struct Parking {
+            data: Vec<u8>,
+            pos: usize,
+            entered: SyncSender<()>,
+            release: Arc<Mutex<Option<Receiver<()>>>>,
+        }
+        impl Read for Parking {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                // Only park on the very first read (before any bytes are served).
+                if let Some(rx) = self
+                    .release
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = self.entered.send(());
+                    let _ = rx.recv();
+                }
+                let n = (self.data.len() - self.pos).min(buf.len());
+                buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+        impl Seek for Parking {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                if let SeekFrom::Start(o) = pos {
+                    self.pos = o as usize;
+                }
+                Ok(self.pos as u64)
+            }
+        }
+
+        let (entered_tx, entered_rx) = sync_channel::<()>(0);
+        let (go_tx, go_rx) = sync_channel::<()>(0);
+        let src: DynSource = Arc::new(SeekPoolSource::single(
+            Parking {
+                data: (0..16).collect(),
+                pos: 0,
+                entered: entered_tx,
+                release: Arc::new(Mutex::new(Some(go_rx))),
+            },
+            16,
+        ));
+
+        // Thread A grabs the guard and parks inside read.
+        let a = {
+            let src = src.clone();
+            std::thread::spawn(move || {
+                let mut b = [0u8; 4];
+                src.read_at(0, &mut b).unwrap();
+                b
+            })
+        };
+        entered_rx.recv().unwrap(); // A now holds the single guard.
+
+        // Thread B's read_at finds try_lock failing on the only cursor and blocks
+        // on .first().lock() — the contention arm — until A releases.
+        let b = {
+            let src = src.clone();
+            std::thread::spawn(move || {
+                let mut b = [0u8; 4];
+                src.read_at(8, &mut b).unwrap();
+                b
+            })
+        };
+        // Give B a moment to reach the blocking lock, then release A.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        go_tx.send(()).unwrap();
+
+        assert_eq!(a.join().unwrap(), [0, 1, 2, 3]);
+        assert_eq!(b.join().unwrap(), [8, 9, 10, 11]);
+    }
 }

@@ -19,6 +19,11 @@ use forensic_vfs::{
 
 // --- doubles -------------------------------------------------------------
 
+/// One directory's children: `(name, child_id, kind)`.
+type Children = Vec<(Vec<u8>, u64, NodeKind)>;
+/// A fixed filesystem tree: `id -> children`.
+type Tree = Vec<(u64, Children)>;
+
 struct MemSource(Vec<u8>);
 impl ImageSource for MemSource {
     fn len(&self) -> u64 {
@@ -41,7 +46,7 @@ fn mem(bytes: Vec<u8>) -> DynSource {
 /// A trivial mounted filesystem whose children come from a fixed tree keyed by
 /// the node's `Opaque` id: `id -> [(name, child_id, kind)]`.
 struct TreeFs {
-    tree: Vec<(u64, Vec<(Vec<u8>, u64, NodeKind)>)>,
+    tree: Tree,
 }
 impl TreeFs {
     fn children(&self, id: u64) -> &[(Vec<u8>, u64, NodeKind)] {
@@ -341,7 +346,7 @@ fn descends_a_volume_system_into_its_filesystem() {
         .unwrap()
         .expect("mounts fs inside a volume");
     let uri = out.spec.to_uri();
-    assert!(uri.contains("vol:") && uri.contains("fs:"), "{uri}");
+    assert!(uri.contains("volume:") && uri.contains("fs:"), "{uri}");
 }
 
 #[test]
@@ -374,8 +379,10 @@ fn descends_a_container_into_its_filesystem() {
 
 #[test]
 fn a_tail_probed_container_matches_a_trailer_magic() {
-    // The container magic sits only in the tail window (last bytes of the source),
-    // exercising the tail-window read + has_magic_from_end path.
+    // The container magic sits only in the tail (last bytes of the source), and
+    // the fs magic sits at an inner offset the container decodes to. The head has
+    // neither, so resolution must read the tail window and match has_magic_from_end
+    // inside Registry::resolve — the DMG-koly-footer path.
     let reg = Registry::new()
         .filesystem(FakeFsProbe {
             magic: b"FSFS",
@@ -383,26 +390,22 @@ fn a_tail_probed_container_matches_a_trailer_magic() {
         })
         .container(FakeContainer {
             magic: b"KOLY",
-            inner: (0, 8192),
+            inner: (16, 8192),
             tail: true,
         });
-    let mut data = b"FSFS".to_vec();
+    let mut data = vec![0u8; 16];
+    data.extend_from_slice(b"FSFS"); // fs magic at the decoded payload's start
     data.resize(8188, 0);
-    data.extend_from_slice(b"KOLY");
-    // The head already carries the fs magic, so the fs prober wins before the
-    // container is consulted — assert the container's tail probe fires directly.
-    let win = SniffWindow::with_tail(0, &data[..40], data.len() as u64, b"KOLY");
-    assert_eq!(
-        FakeContainer {
-            magic: b"KOLY",
-            inner: (0, 8192),
-            tail: true,
-        }
-        .probe(&win),
-        Confidence::Yes {
-            how: "fake container"
-        }
-    );
+    data.extend_from_slice(b"KOLY"); // container trailer at the tail
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .resolve(mem(data), base, 0)
+        .unwrap()
+        .expect("tail-probed container decodes to a mountable fs");
+    assert!(out.spec.to_uri().contains("fs:"));
 }
 
 #[test]
@@ -493,7 +496,7 @@ fn an_empty_source_reads_a_single_byte_window_and_resolves_to_none() {
 
 // --- walk ----------------------------------------------------------------
 
-fn fs_with(tree: Vec<(u64, Vec<(Vec<u8>, u64, NodeKind)>)>) -> TreeFs {
+fn fs_with(tree: Tree) -> TreeFs {
     TreeFs { tree }
 }
 
@@ -752,7 +755,7 @@ fn walk_is_depth_capped() {
     // A linear chain deeper than WALK_MAX_DEPTH terminates without unbounded
     // recursion: each id N is a dir whose only child is id N+1.
     let depth = 300u64;
-    let tree: Vec<(u64, Vec<(Vec<u8>, u64, NodeKind)>)> = (0..depth)
+    let tree: Tree = (0..depth)
         .map(|n| {
             (
                 n,
@@ -811,7 +814,6 @@ fn snapshot_view_carries_epoch_and_snapshot_locator() {
 // alive across the recursive descent (an Arc clone, not a move).
 #[test]
 fn resolve_keeps_the_base_source_shared_across_layers() {
-    let seen = Arc::new(Mutex::new(0usize));
     struct Counting {
         inner: DynSource,
         seen: Arc<Mutex<usize>>,
@@ -825,6 +827,7 @@ fn resolve_keeps_the_base_source_shared_across_layers() {
             self.inner.read_at(offset, buf)
         }
     }
+    let seen = Arc::new(Mutex::new(0usize));
     let reg = Registry::new().filesystem(FakeFsProbe {
         magic: b"FSFS",
         fail: false,

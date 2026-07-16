@@ -12,7 +12,7 @@
 
 **One read-only, positioned-read byte edge — `ImageSource` — that every disk, container, and filesystem reader in the fleet speaks, so a whole evidence stack (`E01 → GPT → BitLocker → NTFS`) composes as a single `Arc<dyn ImageSource>` that N workers read in parallel and no code path can write.**
 
-`forensic-vfs` is the KNOWLEDGE-leaf contract crate of the universal forensic VFS. It defines the layered model — byte source, volume system, crypto layer, filesystem, and the recursive `PathSpec` locator — and nothing else: no format parsing, no reader dependencies. Readers implement these traits; the engine (`crates/engine`) and the `disk4n6` CLI compose them.
+`forensic-vfs` is the KNOWLEDGE-leaf contract crate of the universal forensic VFS. It defines the layered model — byte source, volume system, crypto layer, filesystem, and the recursive `PathSpec` locator — plus the generic layer resolver (`Registry::resolve`, `walk`), and nothing that touches a concrete format: no parsing, no reader dependencies. Readers implement these traits and register in a `Registry`; the fleet orchestration layer wires the concrete readers and the `disk4n6` CLI over them.
 
 ## The one decision that shapes everything
 
@@ -68,8 +68,9 @@ Every byte outside `[A-Za-z0-9._-]` is percent-encoded, so a Windows path contai
 
 ## Where this fits
 
-`forensic-vfs` is the contract crate. Readers implement its traits behind a `vfs`
-feature; the engine (`crates/engine`) composes them. Verified coverage (2026-07):
+`forensic-vfs` is the contract crate plus the generic resolver. Readers implement
+its traits behind a `vfs` feature; the fleet orchestration layer registers the
+concrete readers and drives `Registry::resolve` over them. Verified coverage (2026-07):
 
 | Layer | Contract | Production impls |
 |---|---|---|
