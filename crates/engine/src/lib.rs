@@ -233,7 +233,7 @@ impl Vfs {
                 store: SnapshotRef::ApfsXid(xid),
             })
             .push(Layer::Fs {
-                kind: FsKind::Apfs,
+                kind: FsKind::APFS,
                 at: NodeAddr::Path(Vec::new()),
             });
         Ok(Evidence {
@@ -273,7 +273,7 @@ fn is_apfs(spec: &PathSpec) -> bool {
     matches!(
         spec.layer,
         Layer::Fs {
-            kind: FsKind::Apfs,
+            kind: FsKind::APFS,
             ..
         }
     )
@@ -366,7 +366,7 @@ struct NtfsProbe;
 
 impl FileSystemProbe for NtfsProbe {
     fn kind(&self) -> FsKind {
-        FsKind::Ntfs
+        FsKind::NTFS
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -397,7 +397,7 @@ struct Ext4Probe;
 
 impl FileSystemProbe for Ext4Probe {
     fn kind(&self) -> FsKind {
-        FsKind::Ext
+        FsKind::EXT
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -432,7 +432,7 @@ struct XfsProbe;
 
 impl FileSystemProbe for XfsProbe {
     fn kind(&self) -> FsKind {
-        FsKind::Xfs
+        FsKind::XFS
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -451,7 +451,7 @@ struct Iso9660Probe;
 
 impl FileSystemProbe for Iso9660Probe {
     fn kind(&self) -> FsKind {
-        FsKind::Iso9660
+        FsKind::ISO9660
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -485,7 +485,7 @@ struct ApfsProbe;
 
 impl FileSystemProbe for ApfsProbe {
     fn kind(&self) -> FsKind {
-        FsKind::Apfs
+        FsKind::APFS
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -517,7 +517,7 @@ struct HfsPlusProbe;
 
 impl FileSystemProbe for HfsPlusProbe {
     fn kind(&self) -> FsKind {
-        FsKind::HfsPlus
+        FsKind::HFS_PLUS
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -548,7 +548,7 @@ struct ExFatProbe;
 
 impl FileSystemProbe for ExFatProbe {
     fn kind(&self) -> FsKind {
-        FsKind::ExFat
+        FsKind::EXFAT
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -580,7 +580,7 @@ struct FatProbe;
 
 impl FileSystemProbe for FatProbe {
     fn kind(&self) -> FsKind {
-        FsKind::Fat
+        FsKind::FAT
     }
 
     fn probe(&self, w: &SniffWindow) -> Confidence {
@@ -1208,7 +1208,7 @@ mod tests {
     #[test]
     fn default_is_new_and_probers_report_their_kinds() {
         let _ = Vfs::default().open_source(mem(vec![0u8; 64])).unwrap();
-        assert_eq!(NtfsProbe.kind(), FsKind::Ntfs);
+        assert_eq!(NtfsProbe.kind(), FsKind::NTFS);
         assert_eq!(MbrProbe.scheme(), VolumeScheme::Mbr);
         assert_eq!(GptProbe.scheme(), VolumeScheme::Gpt);
     }
@@ -1374,7 +1374,7 @@ mod tests {
 
     #[test]
     fn ext4_probe_kind_and_open_error() {
-        assert_eq!(Ext4Probe.kind(), FsKind::Ext);
+        assert_eq!(Ext4Probe.kind(), FsKind::EXT);
         // ext4 magic (0x53EF LE @ 1080) but an absurd s_log_block_size (@ 1048)
         // -> Ext4Fs::open rejects it -> loud error, never a silent None.
         let mut v = vec![0u8; 4096];
@@ -1386,7 +1386,7 @@ mod tests {
 
     #[test]
     fn iso9660_probe_kind_and_open_error() {
-        assert_eq!(Iso9660Probe.kind(), FsKind::Iso9660);
+        assert_eq!(Iso9660Probe.kind(), FsKind::ISO9660);
         assert_eq!(Iso9660Probe.probe(&window(&[])), Confidence::No);
         // CD001 present at offset 32769 makes the probe say Yes; the surrounding
         // garbage then fails IsoVfs::open -> loud Decode error, never a silent None.
@@ -1403,7 +1403,7 @@ mod tests {
 
     #[test]
     fn apfs_probe_kind_and_open_error() {
-        assert_eq!(ApfsProbe.kind(), FsKind::Apfs);
+        assert_eq!(ApfsProbe.kind(), FsKind::APFS);
         assert_eq!(ApfsProbe.probe(&window(&[])), Confidence::No);
         // NXSB at offset 32 makes the probe say Yes; the surrounding garbage then
         // fails ApfsFs::open -> loud Decode error, never a silent None.
@@ -1420,7 +1420,7 @@ mod tests {
 
     #[test]
     fn hfsplus_probe_kind_and_no_on_short_window() {
-        assert_eq!(HfsPlusProbe.kind(), FsKind::HfsPlus);
+        assert_eq!(HfsPlusProbe.kind(), FsKind::HFS_PLUS);
         // A window shorter than 1026 bytes cannot carry the @1024 signature.
         assert_eq!(HfsPlusProbe.probe(&window(&[])), Confidence::No);
         // HFSX signature 'HX' at 1024 is also accepted.

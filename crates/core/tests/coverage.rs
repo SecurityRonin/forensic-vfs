@@ -105,6 +105,7 @@ fn every_crypto_scheme_token_round_trips() {
         CryptoScheme::Luks2,
         CryptoScheme::FileVault,
         CryptoScheme::ApfsEncrypted,
+        CryptoScheme::VeraCrypt,
     ] {
         uri_round_trips(&PathSpec::os("/x").push(Layer::Crypto { scheme: s }));
     }

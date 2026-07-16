@@ -17,16 +17,19 @@ exclude       = ["fuzz/", "tests/data/"]
 [features]
 default = []
 # Serialize/deserialize PathSpec so a finding, a mount session, or an evidence
-# row can persist the exact open-recipe and re-resolve deterministically.
-serde = ["dep:serde"]
+# row can persist the exact open-recipe and re-resolve deterministically. Also
+# turns on forensicnomicon-core's serde so the re-exported FsKind round-trips.
+serde = ["dep:serde", "forensicnomicon-core/serde"]
 # Bridge to the fleet reporting model: adds the findings() surface returning
 # forensicnomicon::report::Finding. Non-default so a bare reader stays leaf.
 findings = ["dep:forensicnomicon"]
 
 [dependencies]
-thiserror       = { workspace = true }
-serde           = { workspace = true, optional = true }
-forensicnomicon = { workspace = true, optional = true }
+thiserror            = { workspace = true }
+serde                = { workspace = true, optional = true }
+# The canonical FsKind newtype — zero-dep, so a non-optional leaf dep.
+forensicnomicon-core = { workspace = true }
+forensicnomicon      = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

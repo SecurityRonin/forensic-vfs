@@ -5,7 +5,7 @@ members = ["crates/core", "crates/engine"]
 # Single source of truth for fields shared by every member (DRY): bump version /
 # MSRV / license here once; members inherit via `field.workspace = true`.
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -15,8 +15,13 @@ repository = "https://github.com/SecurityRonin/forensic-vfs"
 thiserror = "2"
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }
+# The canonical filesystem-identity newtype (`FsKind`) lives here. Zero-dep, so a
+# non-optional dep keeps the leaf/lean rule (design handoff): forensic-vfs
+# re-exports it as its own `FsKind`.
+forensicnomicon-core = "1.2"
 # `findings` feature bridge — a non-default feature, so a reader that implements
-# these traits does not inherit forensicnomicon (the true-leaf rule, design §4).
+# these traits does not inherit the full forensicnomicon facade (the true-leaf
+# rule, design §4).
 forensicnomicon = "1"
 
 [workspace.lints.rust]

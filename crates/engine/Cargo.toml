@@ -8,7 +8,7 @@ description = "The forensic-vfs registry + resolver: one Vfs::open(path) that de
 publish = false
 
 [dependencies]
-forensic-vfs = "0.1"
+forensic-vfs = "0.3"
 # KNOWLEDGE [H] state-history vocabulary — EpochTag for the snapshot cohort.
 state-history-forensic = { path = "../../../state-history-forensic" }
 ewf       = { path = "../../../ewf-forensic/core", features = ["vfs"] }

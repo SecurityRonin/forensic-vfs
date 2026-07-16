@@ -160,34 +160,12 @@ fn parse_crypto(t: &str, ctx: &str) -> VfsResult<CryptoScheme> {
         _ => return Err(err("unknown crypto scheme", ctx)),
     })
 }
-fn fs_token(k: FsKind) -> &'static str {
-    match k {
-        FsKind::Ntfs => "ntfs",
-        FsKind::Ext => "ext",
-        FsKind::Xfs => "xfs",
-        FsKind::HfsPlus => "hfsplus",
-        FsKind::Apfs => "apfs",
-        FsKind::Iso9660 => "iso9660",
-        FsKind::Udf => "udf",
-        FsKind::Fat => "fat",
-        FsKind::ExFat => "exfat",
-        FsKind::Other => "other",
-    }
-}
 fn parse_fs_kind(t: &str, ctx: &str) -> VfsResult<FsKind> {
-    Ok(match t {
-        "ntfs" => FsKind::Ntfs,
-        "ext" => FsKind::Ext,
-        "xfs" => FsKind::Xfs,
-        "hfsplus" => FsKind::HfsPlus,
-        "apfs" => FsKind::Apfs,
-        "iso9660" => FsKind::Iso9660,
-        "udf" => FsKind::Udf,
-        "fat" => FsKind::Fat,
-        "exfat" => FsKind::ExFat,
-        "other" => FsKind::Other,
-        _ => return Err(err("unknown filesystem kind", ctx)),
-    })
+    FsKind::known()
+        .iter()
+        .copied()
+        .find(|k| k.as_str() == t)
+        .ok_or_else(|| err("unknown filesystem kind", ctx))
 }
 
 fn u64_field(t: &str, ctx: &str) -> VfsResult<u64> {
@@ -356,7 +334,7 @@ fn layer_encode(l: &Layer) -> String {
             SnapshotRef::VssStore(i) => format!("snapshot:vss,{i}"),
             SnapshotRef::ApfsXid(x) => format!("snapshot:apfs,{x}"),
         },
-        Layer::Fs { kind, at } => format!("fs:{},{}", fs_token(*kind), node_addr_encode(at)),
+        Layer::Fs { kind, at } => format!("fs:{},{}", kind.as_str(), node_addr_encode(at)),
         Layer::Stream { id } => format!("stream:{}", stream_token(*id)),
     }
 }
@@ -487,9 +465,9 @@ impl fmt::Display for PathSpec {
                 },
                 Layer::Fs { kind, at } => match at {
                     NodeAddr::Path(cs) | NodeAddr::Both { path: cs, .. } => {
-                        write!(f, "{}:/{}", fs_token(*kind), comps(cs))?;
+                        write!(f, "{}:/{}", kind.as_str(), comps(cs))?;
                     }
-                    NodeAddr::File(id) => write!(f, "{}#{}", fs_token(*kind), file_id_token(*id))?,
+                    NodeAddr::File(id) => write!(f, "{}#{}", kind.as_str(), file_id_token(*id))?,
                 },
                 Layer::Stream { id } => write!(f, ":{}", stream_token(*id))?,
             }
@@ -542,7 +520,7 @@ mod tests {
                 ])),
             })
             .push(Layer::Fs {
-                kind: FsKind::Ntfs,
+                kind: FsKind::NTFS,
                 at: NodeAddr::Path(vec![
                     b"Windows".to_vec(),
                     b"System32".to_vec(),
@@ -562,7 +540,7 @@ mod tests {
         // space, and a non-UTF-8 byte — all must survive.
         let nasty = b"a|b%c/d e\xff\x00z".to_vec();
         let spec = PathSpec::os("/img.raw").push(Layer::Fs {
-            kind: FsKind::Ext,
+            kind: FsKind::EXT,
             at: NodeAddr::Path(vec![nasty.clone(), b"plain".to_vec()]),
         });
         let uri = spec.to_uri();
@@ -599,13 +577,13 @@ mod tests {
             FileId::Opaque(123),
         ] {
             roundtrip(&PathSpec::os("/x").push(Layer::Fs {
-                kind: FsKind::Apfs,
+                kind: FsKind::APFS,
                 at: NodeAddr::File(id),
             }));
         }
         // Both (id + observed path).
         roundtrip(&PathSpec::os("/x").push(Layer::Fs {
-            kind: FsKind::Ntfs,
+            kind: FsKind::NTFS,
             at: NodeAddr::Both {
                 path: vec![b"Users".to_vec(), b"beth".to_vec()],
                 id: FileId::NtfsRef { entry: 91, seq: 1 },
@@ -626,33 +604,29 @@ mod tests {
     #[test]
     fn empty_path_round_trips() {
         roundtrip(&PathSpec::os("/x").push(Layer::Fs {
-            kind: FsKind::Iso9660,
+            kind: FsKind::ISO9660,
             at: NodeAddr::Path(vec![]),
         }));
     }
 
     #[test]
     fn every_fs_kind_token_round_trips() {
-        // Every FsKind must survive to_uri -> from_uri (the fs_token /
-        // parse_fs_kind pair). XFS is the newest variant; a missing token there
-        // would fail this round-trip.
-        for kind in [
-            FsKind::Ntfs,
-            FsKind::Ext,
-            FsKind::Xfs,
-            FsKind::HfsPlus,
-            FsKind::Apfs,
-            FsKind::Iso9660,
-            FsKind::Udf,
-            FsKind::Fat,
-            FsKind::ExFat,
-            FsKind::Other,
-        ] {
+        // Every registered kind of the string-backed newtype must survive
+        // to_uri -> from_uri (the `as_str` / `parse_fs_kind` pair). Iterating
+        // `known()` means a newly-registered kind is covered automatically.
+        for &kind in FsKind::known() {
             roundtrip(&PathSpec::os("/x").push(Layer::Fs {
                 kind,
                 at: NodeAddr::Path(vec![b"a".to_vec()]),
             }));
         }
+    }
+
+    #[test]
+    fn from_uri_rejects_unknown_fs_kind() {
+        // A token outside `known()` must error, not collapse to a fallback: the
+        // newtype has no `Other`, so an unrecognized fs token is a hard reject.
+        assert!(PathSpec::from_uri("fvfs:fs:zzz,path").is_err());
     }
 
     #[test]
@@ -671,7 +645,7 @@ mod tests {
                 format: ContainerFormat::Ewf,
             })
             .push(Layer::Fs {
-                kind: FsKind::Ntfs,
+                kind: FsKind::NTFS,
                 at: NodeAddr::Path(vec![b"Windows".to_vec(), b"a/b".to_vec()]),
             });
         let json = serde_json::to_string(&spec).expect("serialize");
@@ -690,7 +664,7 @@ mod tests {
                 format: ContainerFormat::Ewf,
             })
             .push(Layer::Fs {
-                kind: FsKind::Ntfs,
+                kind: FsKind::NTFS,
                 at: NodeAddr::Path(vec![b"Windows".to_vec()]),
             });
         let human = format!("{spec}");

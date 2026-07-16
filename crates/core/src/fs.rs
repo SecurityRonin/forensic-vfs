@@ -296,21 +296,9 @@ impl Iterator for NodeStream {
     }
 }
 
-/// The filesystem family.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FsKind {
-    Ntfs,
-    Ext,
-    Xfs,
-    HfsPlus,
-    Apfs,
-    Iso9660,
-    Udf,
-    Fat,
-    ExFat,
-    Other,
-}
+/// The filesystem family — the canonical identity newtype from
+/// forensicnomicon-core (`FsKind::NTFS`, `FsKind::EXT`, …).
+pub use forensicnomicon_core::filesystems::FsKind;
 
 /// One mounted, read-only filesystem. Inode-addressed; `&self` reads share one
 /// handle across workers; internal caches use interior mutability, never
