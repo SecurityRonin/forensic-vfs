@@ -1,7 +1,7 @@
 # Paper: A Universal Positioned-Read Contract for Forensic Evidence
 
 Source for the paper describing the `forensic-vfs` universal reader contract
-(`ImageSource` / `FileSystem`), the `safe-read` panic-free parsing substrate, and
+(`ImageSource` / `FileSystem`), the `safe-read` panic-free-by-construction parsing substrate, and
 the positioned-read block-by-block decoding optimization over compressed images
 (E01 chunks + scattered NTFS `$MFT` reads).
 
