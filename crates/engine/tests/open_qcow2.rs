@@ -17,7 +17,7 @@ fn vfs_open_decodes_qcow2_container_to_ntfs() {
     let fs = evidence
         .fs
         .expect("engine decoded the QCOW2 container to NTFS");
-    assert_eq!(fs.kind(), forensic_vfs::FsKind::Ntfs);
+    assert_eq!(fs.kind(), forensic_vfs::FsKind::NTFS);
     let id = fs
         .lookup(fs.root(), b"file1.txt")
         .expect("lookup")

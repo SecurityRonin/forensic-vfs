@@ -22,7 +22,7 @@ fn vfs_open_detects_and_mounts_iso9660() {
     let evidence = vfs.open(Path::new(IMG)).expect("open evidence");
 
     let fs = evidence.fs.expect("engine detected a filesystem");
-    assert_eq!(fs.kind(), FsKind::Iso9660);
+    assert_eq!(fs.kind(), FsKind::ISO9660);
     assert_eq!(fs.root(), FileId::IsoExtent { block: 23 });
 
     let id = fs

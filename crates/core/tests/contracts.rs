@@ -42,7 +42,7 @@ impl ImageSource for MemSource {
 struct MemFs;
 impl FileSystem for MemFs {
     fn kind(&self) -> FsKind {
-        FsKind::Ntfs
+        FsKind::NTFS
     }
     fn root(&self) -> FileId {
         FileId::NtfsRef { entry: 5, seq: 1 }
@@ -191,7 +191,7 @@ fn image_source_composes_as_dyn_and_has_working_defaults() {
 #[test]
 fn filesystem_composes_as_dyn_and_drives_every_op() {
     let fs: DynFs = Arc::new(MemFs);
-    assert_eq!(fs.kind(), FsKind::Ntfs);
+    assert_eq!(fs.kind(), FsKind::NTFS);
     assert!(matches!(fs.root(), FileId::NtfsRef { entry: 5, seq: 1 }));
     assert_eq!(fs.sector_sizes().logical, 512);
     assert!(matches!(fs.timestamp_zone(), TimeZonePolicy::Utc));

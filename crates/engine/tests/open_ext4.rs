@@ -18,7 +18,7 @@ fn vfs_open_detects_and_mounts_bare_ext4() {
     let evidence = vfs.open(Path::new(IMG)).expect("open evidence");
 
     let fs = evidence.fs.expect("engine detected a filesystem");
-    assert_eq!(fs.kind(), FsKind::Ext);
+    assert_eq!(fs.kind(), FsKind::EXT);
 
     let id = fs
         .lookup(fs.root(), b"hello.txt")

@@ -18,7 +18,7 @@ fn vfs_open_resolves_ntfs_partition_in_gpt_disk() {
     let evidence = vfs.open(Path::new(GPT_E01)).expect("open gpt disk");
 
     let fs = evidence.fs.expect("engine resolved the GPT NTFS partition");
-    assert_eq!(fs.kind(), forensic_vfs::FsKind::Ntfs);
+    assert_eq!(fs.kind(), forensic_vfs::FsKind::NTFS);
 
     let id = fs
         .lookup(fs.root(), b"file1.txt")

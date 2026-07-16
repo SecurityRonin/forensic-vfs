@@ -24,7 +24,7 @@ fn vfs_open_resolves_ntfs_partition_in_mbr_disk() {
 
     // The engine must descend MBR → partition 1 → NTFS.
     let fs = evidence.fs.expect("engine resolved the NTFS partition");
-    assert_eq!(fs.kind(), forensic_vfs::FsKind::Ntfs);
+    assert_eq!(fs.kind(), forensic_vfs::FsKind::NTFS);
 
     let id = fs
         .lookup(fs.root(), b"file1.txt")

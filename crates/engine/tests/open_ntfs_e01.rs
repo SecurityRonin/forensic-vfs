@@ -18,7 +18,7 @@ fn vfs_open_detects_and_mounts_ntfs_in_e01() {
     let evidence = vfs.open(Path::new(E01)).expect("open evidence");
 
     let fs = evidence.fs.expect("engine detected a filesystem");
-    assert_eq!(fs.kind(), forensic_vfs::FsKind::Ntfs);
+    assert_eq!(fs.kind(), forensic_vfs::FsKind::NTFS);
 
     let id = fs
         .lookup(fs.root(), b"file1.txt")

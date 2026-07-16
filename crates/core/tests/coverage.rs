@@ -49,7 +49,7 @@ fn both_addr_with_empty_path_round_trips() {
     use forensic_vfs::fs::FileId;
     // A `Both` with no observed path components — the id-only branch.
     uri_round_trips(&PathSpec::os("/x").push(Layer::Fs {
-        kind: FsKind::Ntfs,
+        kind: FsKind::NTFS,
         at: NodeAddr::Both {
             path: vec![],
             id: FileId::NtfsRef { entry: 3, seq: 1 },
@@ -112,17 +112,9 @@ fn every_crypto_scheme_token_round_trips() {
 
 #[test]
 fn every_fs_kind_token_round_trips() {
-    for k in [
-        FsKind::Ntfs,
-        FsKind::Ext,
-        FsKind::HfsPlus,
-        FsKind::Apfs,
-        FsKind::Iso9660,
-        FsKind::Udf,
-        FsKind::Fat,
-        FsKind::ExFat,
-        FsKind::Other,
-    ] {
+    // Every registered kind of the string-backed newtype must survive the
+    // fs-locator token round-trip (the `as_str` / `parse_fs_kind` pair).
+    for &k in FsKind::known() {
         uri_round_trips(&PathSpec::os("/x").push(Layer::Fs {
             kind: k,
             at: NodeAddr::Path(vec![b"a".to_vec()]),
@@ -177,7 +169,7 @@ impl CryptoProbe for Cp {
 struct Fp;
 impl FileSystemProbe for Fp {
     fn kind(&self) -> FsKind {
-        FsKind::Fat
+        FsKind::FAT
     }
     fn probe(&self, _w: &SniffWindow) -> forensic_vfs::Confidence {
         forensic_vfs::Confidence::No
@@ -281,7 +273,7 @@ fn display_renders_every_layer_kind() {
             store: SnapshotRef::VssStore(1),
         })
         .push(Layer::Fs {
-            kind: FsKind::Ntfs,
+            kind: FsKind::NTFS,
             at: NodeAddr::File(FileId::NtfsRef { entry: 5, seq: 1 }),
         })
         .push(Layer::Stream {
@@ -331,7 +323,7 @@ fn findings_default_surfaces_are_empty() {
     struct F;
     impl FileSystem for F {
         fn kind(&self) -> FsKind {
-            FsKind::Other
+            FsKind::BTRFS
         }
         fn root(&self) -> FileId {
             FileId::Opaque(0)

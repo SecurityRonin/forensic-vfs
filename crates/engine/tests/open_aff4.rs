@@ -23,7 +23,7 @@ fn vfs_open_decodes_aff4_to_its_ext4_payload() {
         .open(Path::new(FIXTURE))
         .expect("open aff4 fixture");
     let fs = ev.fs.expect("AFF4 should decode to an ext4 filesystem");
-    assert_eq!(fs.kind(), FsKind::Ext);
+    assert_eq!(fs.kind(), FsKind::EXT);
 
     let uri = ev.root.to_uri();
     assert!(

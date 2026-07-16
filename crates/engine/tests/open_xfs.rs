@@ -4,7 +4,7 @@
 //! Two tiers:
 //! - **Always-on (committed fixture):** the real v5.img superblock sector
 //!   (`xfs_superblock.bin`) is sniffed by the registered XFS probe and mounted,
-//!   proving `FsKind::Xfs` detection + the `fs:xfs` locator without shipping the
+//!   proving `FsKind::XFS` detection + the `fs:xfs` locator without shipping the
 //!   512 MiB volume.
 //! - **Env-gated real walk (`XFS_ORACLE_V5_IMG`):** when the full v5.img oracle
 //!   is present (owned by `xfs-forensic`; consumed here via the env var — the
@@ -48,7 +48,7 @@ fn vfs_detects_and_mounts_xfs_from_the_superblock() {
         .open_source(src)
         .expect("resolve")
         .expect("engine detected XFS from the XFSB superblock");
-    assert_eq!(fs.kind(), FsKind::Xfs);
+    assert_eq!(fs.kind(), FsKind::XFS);
 }
 
 /// Resolve the full v5 oracle image (owned by `xfs-forensic`) via
