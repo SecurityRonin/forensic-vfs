@@ -25,6 +25,9 @@ Split by kind:
 ## Consequences
 
 - A fact is stated once, in forensicnomicon, and referenced — not copied into each reader.
+  The **filesystem-family identity** followed the same path in 0.3.0: the local `FsKind` enum
+  retired in favor of re-exporting `forensicnomicon_core::filesystems::FsKind`, a string-backed
+  newtype, so a fleet reader and the VFS agree on one identity type without a per-crate enum.
 - A computation is implemented once, in its crate, and depended on.
 - The distinction matters: temporal *knowledge* (which format a timestamp is, its epoch)
   belongs in forensicnomicon; temporal *math* (converting it) belongs in timeglyph. Forcing
