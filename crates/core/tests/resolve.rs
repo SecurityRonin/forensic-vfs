@@ -1,0 +1,844 @@
+//! Generic resolver tests: drive `Registry::resolve`, `walk`, and the snapshot
+//! view helpers with **fake probers over synthetic sources** — no concrete
+//! reader. These exercise every branch of the generic resolver that moved into
+//! core from the engine (the reader-wired `Vfs`/`default_registry` path stays in
+//! the orchestration layer).
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::sync::{Arc, Mutex};
+
+use forensic_vfs::adapters::SubRange;
+use forensic_vfs::{
+    walk, Allocation, Confidence, ContainerDecoder, ContainerFormat, DirEntry, DirStream, DynFs,
+    DynSource, Evidence, FileId, FileSystem, FileSystemProbe, FsKind, FsMeta, ImageSource, Layer,
+    MacbTimes, NodeAddr, NodeKind, PathSpec, Registry, ResidencyKind, SectorSizes, SnapshotRef,
+    SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme,
+    VolumeSystem, VolumeSystemProbe,
+};
+
+// --- doubles -------------------------------------------------------------
+
+struct MemSource(Vec<u8>);
+impl ImageSource for MemSource {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+        let off = usize::try_from(offset).unwrap_or(usize::MAX);
+        let Some(src) = self.0.get(off..) else {
+            return Ok(0);
+        };
+        let n = src.len().min(buf.len());
+        buf[..n].copy_from_slice(&src[..n]);
+        Ok(n)
+    }
+}
+fn mem(bytes: Vec<u8>) -> DynSource {
+    Arc::new(MemSource(bytes))
+}
+
+/// A trivial mounted filesystem whose children come from a fixed tree keyed by
+/// the node's `Opaque` id: `id -> [(name, child_id, kind)]`.
+struct TreeFs {
+    tree: Vec<(u64, Vec<(Vec<u8>, u64, NodeKind)>)>,
+}
+impl TreeFs {
+    fn children(&self, id: u64) -> &[(Vec<u8>, u64, NodeKind)] {
+        self.tree
+            .iter()
+            .find(|(k, _)| *k == id)
+            .map_or(&[], |(_, v)| v.as_slice())
+    }
+}
+impl FileSystem for TreeFs {
+    fn kind(&self) -> FsKind {
+        FsKind::NTFS
+    }
+    fn root(&self) -> FileId {
+        FileId::Opaque(0)
+    }
+    fn sector_sizes(&self) -> SectorSizes {
+        SectorSizes {
+            logical: 512,
+            physical: 512,
+            cluster_or_block: 512,
+        }
+    }
+    fn timestamp_zone(&self) -> TimeZonePolicy {
+        TimeZonePolicy::Utc
+    }
+    fn read_dir(&self, ino: FileId) -> VfsResult<DirStream> {
+        let id = match ino {
+            FileId::Opaque(n) => n,
+            _ => 0,
+        };
+        let kids: Vec<VfsResult<DirEntry>> = self
+            .children(id)
+            .iter()
+            .map(|(name, cid, kind)| {
+                Ok(DirEntry {
+                    name: name.clone(),
+                    id: FileId::Opaque(*cid),
+                    kind: *kind,
+                })
+            })
+            .collect();
+        Ok(DirStream::new(kids.into_iter()))
+    }
+    fn extents(
+        &self,
+        _ino: FileId,
+        _stream: forensic_vfs::StreamId,
+    ) -> VfsResult<forensic_vfs::ExtentStream> {
+        Ok(forensic_vfs::ExtentStream::empty())
+    }
+    fn lookup(&self, _parent: FileId, _name: &[u8]) -> VfsResult<Option<FileId>> {
+        Ok(None)
+    }
+    fn meta(&self, ino: FileId) -> VfsResult<FsMeta> {
+        let id = match ino {
+            FileId::Opaque(n) => n,
+            _ => 0,
+        };
+        // The node's kind is whatever its parent recorded; the root is a dir.
+        let kind = if id == 0 {
+            NodeKind::Dir
+        } else {
+            self.tree
+                .iter()
+                .flat_map(|(_, v)| v.iter())
+                .find(|(_, cid, _)| *cid == id)
+                .map_or(NodeKind::File, |(_, _, k)| *k)
+        };
+        Ok(FsMeta {
+            ino: id,
+            kind,
+            allocated: Allocation::Allocated,
+            size: 0,
+            nlink: 1,
+            uid: None,
+            gid: None,
+            mode: None,
+            times: MacbTimes::default(),
+            streams: Vec::new(),
+            residency: ResidencyKind::Resident { inline_len: 0 },
+            link_target: None,
+        })
+    }
+    fn read_at(
+        &self,
+        _ino: FileId,
+        _stream: forensic_vfs::StreamId,
+        _off: u64,
+        _buf: &mut [u8],
+    ) -> VfsResult<usize> {
+        Ok(0)
+    }
+    fn read_link(&self, _ino: FileId, _cap: usize) -> VfsResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+    fn deleted(&self) -> VfsResult<forensic_vfs::NodeStream> {
+        Ok(forensic_vfs::NodeStream::empty())
+    }
+    fn unallocated(&self) -> VfsResult<forensic_vfs::ExtentStream> {
+        Ok(forensic_vfs::ExtentStream::empty())
+    }
+}
+
+/// A filesystem prober that says `Yes` when the head begins with `magic` and
+/// mounts a fixed `TreeFs`. `fail` makes `open` return a loud error even after a
+/// `Yes` verdict (the "magic but garbage body" case).
+struct FakeFsProbe {
+    magic: &'static [u8],
+    fail: bool,
+}
+impl FileSystemProbe for FakeFsProbe {
+    fn kind(&self) -> FsKind {
+        FsKind::NTFS
+    }
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.has_magic(0, self.magic) {
+            Confidence::Yes { how: "fake fs" }
+        } else {
+            Confidence::No
+        }
+    }
+    fn open(&self, _src: DynSource) -> VfsResult<DynFs> {
+        if self.fail {
+            return Err(VfsError::Decode {
+                layer: "fakefs",
+                offset: 0,
+                detail: "garbage body".to_string(),
+                bytes: forensic_vfs::SmallHex::new(&[]),
+            });
+        }
+        Ok(Arc::new(TreeFs {
+            tree: vec![
+                (
+                    0,
+                    vec![
+                        (b"dir".to_vec(), 1, NodeKind::Dir),
+                        (b"a.txt".to_vec(), 2, NodeKind::File),
+                    ],
+                ),
+                (1, vec![(b"b.txt".to_vec(), 3, NodeKind::File)]),
+            ],
+        }))
+    }
+}
+
+/// A volume system exposing sub-ranges of its parent at fixed `(start,len)`.
+struct FakeVs {
+    parent: DynSource,
+    descs: Vec<VolumeDesc>,
+}
+impl VolumeSystem for FakeVs {
+    fn scheme(&self) -> VolumeScheme {
+        VolumeScheme::Gpt
+    }
+    fn volumes(&self) -> &[VolumeDesc] {
+        &self.descs
+    }
+    fn open_volume(&self, index: usize) -> VfsResult<DynSource> {
+        let d = self.descs.get(index).ok_or(VfsError::OutOfRange {
+            what: "fake volume",
+            offset: index as u64,
+            len: 1,
+            bound: self.descs.len() as u64,
+        })?;
+        Ok(Arc::new(SubRange::new(self.parent.clone(), d.start, d.len)))
+    }
+}
+
+/// A volume-system prober keyed on a head magic; each volume is a 512-byte window.
+struct FakeVsProbe {
+    magic: &'static [u8],
+    windows: Vec<(u64, u64)>,
+}
+impl VolumeSystemProbe for FakeVsProbe {
+    fn scheme(&self) -> VolumeScheme {
+        VolumeScheme::Gpt
+    }
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.has_magic(0, self.magic) {
+            Confidence::Yes { how: "fake vs" }
+        } else {
+            Confidence::No
+        }
+    }
+    fn open(&self, src: DynSource) -> VfsResult<Box<dyn VolumeSystem>> {
+        let descs = self
+            .windows
+            .iter()
+            .enumerate()
+            .map(|(i, (start, len))| VolumeDesc {
+                index: i,
+                kind: VolumeKind::Partition,
+                start: *start,
+                len: *len,
+                type_hint: None,
+                label: None,
+            })
+            .collect();
+        Ok(Box::new(FakeVs { parent: src, descs }))
+    }
+}
+
+/// A container decoder keyed on a head magic that decodes to a fixed sub-window
+/// of the same source (models an image whose payload sits at an inner offset).
+struct FakeContainer {
+    magic: &'static [u8],
+    inner: (u64, u64),
+    tail: bool,
+}
+impl ContainerDecoder for FakeContainer {
+    fn format(&self) -> ContainerFormat {
+        ContainerFormat::Raw
+    }
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        let hit = if self.tail {
+            w.has_magic_from_end(self.magic.len(), self.magic)
+        } else {
+            w.has_magic(0, self.magic)
+        };
+        if hit {
+            Confidence::Yes {
+                how: "fake container",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+    fn open(&self, src: DynSource) -> VfsResult<DynSource> {
+        Ok(Arc::new(SubRange::new(src, self.inner.0, self.inner.1)))
+    }
+}
+
+// --- resolve branches ----------------------------------------------------
+
+#[test]
+fn resolves_a_filesystem_at_the_top_layer() {
+    let reg = Registry::new().filesystem(FakeFsProbe {
+        magic: b"FSFS",
+        fail: false,
+    });
+    let mut data = b"FSFS".to_vec();
+    data.resize(8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg.resolve(mem(data), base, 0).unwrap().expect("mounts fs");
+    // The locator gains an fs: layer at the empty path.
+    assert!(matches!(
+        out.spec.layer,
+        Layer::Fs {
+            kind: FsKind::NTFS,
+            at: NodeAddr::Path(_)
+        }
+    ));
+    assert_eq!(out.fs.kind(), FsKind::NTFS);
+}
+
+#[test]
+fn a_matching_probe_whose_open_fails_propagates_loud() {
+    let reg = Registry::new().filesystem(FakeFsProbe {
+        magic: b"FSFS",
+        fail: true,
+    });
+    let mut data = b"FSFS".to_vec();
+    data.resize(8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg.resolve(mem(data), base, 0).is_err());
+}
+
+#[test]
+fn descends_a_volume_system_into_its_filesystem() {
+    // A volume system whose single partition (at offset 512) holds the fs magic.
+    let reg = Registry::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .volume_system(FakeVsProbe {
+            magic: b"VOLS",
+            windows: vec![(512, 4096)],
+        });
+    let mut data = b"VOLS".to_vec();
+    data.resize(512, 0);
+    data.extend_from_slice(b"FSFS");
+    data.resize(8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .resolve(mem(data), base, 0)
+        .unwrap()
+        .expect("mounts fs inside a volume");
+    let uri = out.spec.to_uri();
+    assert!(uri.contains("vol:") && uri.contains("fs:"), "{uri}");
+}
+
+#[test]
+fn descends_a_container_into_its_filesystem() {
+    // A container whose payload begins at offset 1024 and carries the fs magic.
+    let reg = Registry::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .container(FakeContainer {
+            magic: b"CONT",
+            inner: (1024, 7168),
+            tail: false,
+        });
+    let mut data = b"CONT".to_vec();
+    data.resize(1024, 0);
+    data.extend_from_slice(b"FSFS");
+    data.resize(8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .resolve(mem(data), base, 0)
+        .unwrap()
+        .expect("mounts fs inside a container");
+    assert!(out.spec.to_uri().contains("fs:"));
+}
+
+#[test]
+fn a_tail_probed_container_matches_a_trailer_magic() {
+    // The container magic sits only in the tail window (last bytes of the source),
+    // exercising the tail-window read + has_magic_from_end path.
+    let reg = Registry::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .container(FakeContainer {
+            magic: b"KOLY",
+            inner: (0, 8192),
+            tail: true,
+        });
+    let mut data = b"FSFS".to_vec();
+    data.resize(8188, 0);
+    data.extend_from_slice(b"KOLY");
+    // The head already carries the fs magic, so the fs prober wins before the
+    // container is consulted — assert the container's tail probe fires directly.
+    let win = SniffWindow::with_tail(0, &data[..40], data.len() as u64, b"KOLY");
+    assert_eq!(
+        FakeContainer {
+            magic: b"KOLY",
+            inner: (0, 8192),
+            tail: true,
+        }
+        .probe(&win),
+        Confidence::Yes {
+            how: "fake container"
+        }
+    );
+}
+
+#[test]
+fn unrecognized_source_resolves_to_none() {
+    let reg = Registry::new().filesystem(FakeFsProbe {
+        magic: b"FSFS",
+        fail: false,
+    });
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: 4096,
+    });
+    assert!(reg
+        .resolve(mem(vec![0u8; 4096]), base, 0)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_volume_system_whose_volumes_hold_no_fs_falls_through_to_none() {
+    let reg = Registry::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .volume_system(FakeVsProbe {
+            magic: b"VOLS",
+            windows: vec![(512, 512)],
+        });
+    let mut data = b"VOLS".to_vec();
+    data.resize(4096, 0); // the partition window is all zeros -> no fs
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg.resolve(mem(data), base, 0).unwrap().is_none());
+}
+
+#[test]
+fn a_container_whose_payload_holds_no_fs_falls_through_to_none() {
+    let reg = Registry::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .container(FakeContainer {
+            magic: b"CONT",
+            inner: (16, 4096),
+            tail: false,
+        });
+    let mut data = b"CONT".to_vec();
+    data.resize(4096, 0); // payload after offset 16 is all zeros -> no fs
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg.resolve(mem(data), base, 0).unwrap().is_none());
+}
+
+#[test]
+fn recursion_is_depth_capped_on_a_self_referential_container() {
+    // A container that decodes to its own whole self recurses forever; the depth
+    // cap breaks it, yielding None rather than a stack overflow.
+    let reg = Registry::new().container(FakeContainer {
+        magic: b"LOOP",
+        inner: (0, 4096),
+        tail: false,
+    });
+    let mut data = b"LOOP".to_vec();
+    data.resize(4096, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg.resolve(mem(data), base, 0).unwrap().is_none());
+}
+
+#[test]
+fn an_empty_source_reads_a_single_byte_window_and_resolves_to_none() {
+    // total == 0 exercises the clamp(1, ..) head window and the zero-length tail.
+    let reg = Registry::new().filesystem(FakeFsProbe {
+        magic: b"FSFS",
+        fail: false,
+    });
+    let base = PathSpec::root(Layer::Range { start: 0, len: 0 });
+    assert!(reg.resolve(mem(Vec::new()), base, 0).unwrap().is_none());
+}
+
+// --- walk ----------------------------------------------------------------
+
+fn fs_with(tree: Vec<(u64, Vec<(Vec<u8>, u64, NodeKind)>)>) -> TreeFs {
+    TreeFs { tree }
+}
+
+#[test]
+fn walk_enumerates_the_tree_and_skips_dot_entries() {
+    let fs = fs_with(vec![
+        (
+            0,
+            vec![
+                (b".".to_vec(), 0, NodeKind::Dir),
+                (b"..".to_vec(), 0, NodeKind::Dir),
+                (b"dir".to_vec(), 1, NodeKind::Dir),
+                (b"a.txt".to_vec(), 2, NodeKind::File),
+            ],
+        ),
+        (1, vec![(b"b.txt".to_vec(), 3, NodeKind::File)]),
+    ]);
+    let entries = walk(&fs).unwrap();
+    let names: Vec<String> = entries
+        .iter()
+        .filter_map(|e| {
+            e.path
+                .last()
+                .map(|n| String::from_utf8_lossy(n).to_string())
+        })
+        .collect();
+    assert!(names.contains(&"dir".to_string()));
+    assert!(names.contains(&"a.txt".to_string()));
+    assert!(names.contains(&"b.txt".to_string()));
+    assert!(!names.iter().any(|n| n == "." || n == ".."));
+    // b.txt is nested one level under dir.
+    let b = entries
+        .iter()
+        .find(|e| e.path.last().map(Vec::as_slice) == Some(b"b.txt".as_slice()))
+        .unwrap();
+    assert_eq!(b.path.len(), 2);
+}
+
+#[test]
+fn walk_is_loop_guarded_against_a_self_referential_directory() {
+    // A directory that lists itself as a child would recurse forever without the
+    // visited set; walk terminates.
+    let fs = fs_with(vec![(0, vec![(b"self".to_vec(), 0, NodeKind::Dir)])]);
+    let entries = walk(&fs).unwrap();
+    // The single "self" entry is emitted once; the loop back into id 0 is guarded.
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn walk_propagates_a_read_dir_error() {
+    struct Boom;
+    impl FileSystem for Boom {
+        fn kind(&self) -> FsKind {
+            FsKind::NTFS
+        }
+        fn root(&self) -> FileId {
+            FileId::Opaque(0)
+        }
+        fn sector_sizes(&self) -> SectorSizes {
+            SectorSizes {
+                logical: 512,
+                physical: 512,
+                cluster_or_block: 512,
+            }
+        }
+        fn timestamp_zone(&self) -> TimeZonePolicy {
+            TimeZonePolicy::Utc
+        }
+        fn read_dir(&self, _ino: FileId) -> VfsResult<DirStream> {
+            Err(VfsError::Decode {
+                layer: "boom",
+                offset: 0,
+                detail: "read_dir failed".to_string(),
+                bytes: forensic_vfs::SmallHex::new(&[]),
+            })
+        }
+        fn extents(
+            &self,
+            _ino: FileId,
+            _stream: forensic_vfs::StreamId,
+        ) -> VfsResult<forensic_vfs::ExtentStream> {
+            Ok(forensic_vfs::ExtentStream::empty())
+        }
+        fn lookup(&self, _parent: FileId, _name: &[u8]) -> VfsResult<Option<FileId>> {
+            Ok(None)
+        }
+        fn meta(&self, _ino: FileId) -> VfsResult<FsMeta> {
+            Err(VfsError::Decode {
+                layer: "boom",
+                offset: 0,
+                detail: "meta failed".to_string(),
+                bytes: forensic_vfs::SmallHex::new(&[]),
+            })
+        }
+        fn read_at(
+            &self,
+            _ino: FileId,
+            _stream: forensic_vfs::StreamId,
+            _off: u64,
+            _buf: &mut [u8],
+        ) -> VfsResult<usize> {
+            Ok(0)
+        }
+        fn read_link(&self, _ino: FileId, _cap: usize) -> VfsResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn deleted(&self) -> VfsResult<forensic_vfs::NodeStream> {
+            Ok(forensic_vfs::NodeStream::empty())
+        }
+        fn unallocated(&self) -> VfsResult<forensic_vfs::ExtentStream> {
+            Ok(forensic_vfs::ExtentStream::empty())
+        }
+    }
+    assert!(walk(&Boom).is_err());
+}
+
+#[test]
+fn walk_propagates_a_meta_error() {
+    // read_dir yields one entry but meta on it fails -> walk aborts loud.
+    struct MetaBoom;
+    impl FileSystem for MetaBoom {
+        fn kind(&self) -> FsKind {
+            FsKind::NTFS
+        }
+        fn root(&self) -> FileId {
+            FileId::Opaque(0)
+        }
+        fn sector_sizes(&self) -> SectorSizes {
+            SectorSizes {
+                logical: 512,
+                physical: 512,
+                cluster_or_block: 512,
+            }
+        }
+        fn timestamp_zone(&self) -> TimeZonePolicy {
+            TimeZonePolicy::Utc
+        }
+        fn read_dir(&self, _ino: FileId) -> VfsResult<DirStream> {
+            Ok(DirStream::new(std::iter::once(Ok(DirEntry {
+                name: b"x".to_vec(),
+                id: FileId::Opaque(1),
+                kind: NodeKind::File,
+            }))))
+        }
+        fn extents(
+            &self,
+            _ino: FileId,
+            _stream: forensic_vfs::StreamId,
+        ) -> VfsResult<forensic_vfs::ExtentStream> {
+            Ok(forensic_vfs::ExtentStream::empty())
+        }
+        fn lookup(&self, _parent: FileId, _name: &[u8]) -> VfsResult<Option<FileId>> {
+            Ok(None)
+        }
+        fn meta(&self, _ino: FileId) -> VfsResult<FsMeta> {
+            Err(VfsError::Decode {
+                layer: "boom",
+                offset: 0,
+                detail: "meta failed".to_string(),
+                bytes: forensic_vfs::SmallHex::new(&[]),
+            })
+        }
+        fn read_at(
+            &self,
+            _ino: FileId,
+            _stream: forensic_vfs::StreamId,
+            _off: u64,
+            _buf: &mut [u8],
+        ) -> VfsResult<usize> {
+            Ok(0)
+        }
+        fn read_link(&self, _ino: FileId, _cap: usize) -> VfsResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn deleted(&self) -> VfsResult<forensic_vfs::NodeStream> {
+            Ok(forensic_vfs::NodeStream::empty())
+        }
+        fn unallocated(&self) -> VfsResult<forensic_vfs::ExtentStream> {
+            Ok(forensic_vfs::ExtentStream::empty())
+        }
+    }
+    assert!(walk(&MetaBoom).is_err());
+}
+
+#[test]
+fn walk_propagates_a_dir_entry_stream_error() {
+    // The dir stream itself yields an Err item -> walk aborts loud.
+    struct EntryBoom;
+    impl FileSystem for EntryBoom {
+        fn kind(&self) -> FsKind {
+            FsKind::NTFS
+        }
+        fn root(&self) -> FileId {
+            FileId::Opaque(0)
+        }
+        fn sector_sizes(&self) -> SectorSizes {
+            SectorSizes {
+                logical: 512,
+                physical: 512,
+                cluster_or_block: 512,
+            }
+        }
+        fn timestamp_zone(&self) -> TimeZonePolicy {
+            TimeZonePolicy::Utc
+        }
+        fn read_dir(&self, _ino: FileId) -> VfsResult<DirStream> {
+            Ok(DirStream::new(std::iter::once(Err(VfsError::Decode {
+                layer: "boom",
+                offset: 0,
+                detail: "entry failed".to_string(),
+                bytes: forensic_vfs::SmallHex::new(&[]),
+            }))))
+        }
+        fn extents(
+            &self,
+            _ino: FileId,
+            _stream: forensic_vfs::StreamId,
+        ) -> VfsResult<forensic_vfs::ExtentStream> {
+            Ok(forensic_vfs::ExtentStream::empty())
+        }
+        fn lookup(&self, _parent: FileId, _name: &[u8]) -> VfsResult<Option<FileId>> {
+            Ok(None)
+        }
+        fn meta(&self, _ino: FileId) -> VfsResult<FsMeta> {
+            Err(VfsError::Decode {
+                layer: "boom",
+                offset: 0,
+                detail: "meta".to_string(),
+                bytes: forensic_vfs::SmallHex::new(&[]),
+            })
+        }
+        fn read_at(
+            &self,
+            _ino: FileId,
+            _stream: forensic_vfs::StreamId,
+            _off: u64,
+            _buf: &mut [u8],
+        ) -> VfsResult<usize> {
+            Ok(0)
+        }
+        fn read_link(&self, _ino: FileId, _cap: usize) -> VfsResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn deleted(&self) -> VfsResult<forensic_vfs::NodeStream> {
+            Ok(forensic_vfs::NodeStream::empty())
+        }
+        fn unallocated(&self) -> VfsResult<forensic_vfs::ExtentStream> {
+            Ok(forensic_vfs::ExtentStream::empty())
+        }
+    }
+    assert!(walk(&EntryBoom).is_err());
+}
+
+#[test]
+fn walk_is_depth_capped() {
+    // A linear chain deeper than WALK_MAX_DEPTH terminates without unbounded
+    // recursion: each id N is a dir whose only child is id N+1.
+    let depth = 300u64;
+    let tree: Vec<(u64, Vec<(Vec<u8>, u64, NodeKind)>)> = (0..depth)
+        .map(|n| {
+            (
+                n,
+                vec![(format!("d{n}").into_bytes(), n + 1, NodeKind::Dir)],
+            )
+        })
+        .collect();
+    // walk must terminate (the depth cap stops descent); it returns Ok.
+    assert!(walk(&fs_with(tree)).is_ok());
+}
+
+// --- Evidence + SnapshotView helpers -------------------------------------
+
+#[test]
+fn evidence_carries_a_root_locator_and_optional_fs() {
+    let ev = Evidence {
+        root: PathSpec::os("/img.raw"),
+        fs: None,
+    };
+    assert!(ev.fs.is_none());
+    assert_eq!(ev.root, PathSpec::os("/img.raw"));
+}
+
+#[test]
+fn epoch_from_create_time_round_trips_and_orders() {
+    let t = 0x0123_4567_89ab_cdefu64;
+    let tag = forensic_vfs::epoch_from_create_time(t);
+    assert_eq!(&tag.0[0..24], &[0u8; 24], "high 24 bytes are zero");
+    assert_eq!(
+        u64::from_be_bytes(tag.0[24..32].try_into().unwrap()),
+        t,
+        "create_time round-trips out of the low 8 bytes"
+    );
+    assert!(
+        forensic_vfs::epoch_from_create_time(t + 1).0 > tag.0,
+        "a later create_time yields a greater tag"
+    );
+}
+
+#[test]
+fn snapshot_view_carries_epoch_and_snapshot_locator() {
+    let base = PathSpec::os("/ev.dmg");
+    let v = forensic_vfs::snapshot_view(&base, 42, "daily".to_string(), 1000);
+    assert_eq!(v.xid, 42);
+    assert_eq!(v.name, "daily");
+    assert_eq!(v.epoch, forensic_vfs::epoch_from_create_time(1000));
+    assert!(matches!(
+        v.locator.layer,
+        Layer::Snapshot {
+            store: SnapshotRef::ApfsXid(42)
+        }
+    ));
+}
+
+// A shared-state sanity check that the resolver's source-cloning keeps the base
+// alive across the recursive descent (an Arc clone, not a move).
+#[test]
+fn resolve_keeps_the_base_source_shared_across_layers() {
+    let seen = Arc::new(Mutex::new(0usize));
+    struct Counting {
+        inner: DynSource,
+        seen: Arc<Mutex<usize>>,
+    }
+    impl ImageSource for Counting {
+        fn len(&self) -> u64 {
+            self.inner.len()
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+            *self.seen.lock().unwrap() += 1;
+            self.inner.read_at(offset, buf)
+        }
+    }
+    let reg = Registry::new().filesystem(FakeFsProbe {
+        magic: b"FSFS",
+        fail: false,
+    });
+    let mut data = b"FSFS".to_vec();
+    data.resize(8192, 0);
+    let src: DynSource = Arc::new(Counting {
+        inner: mem(data.clone()),
+        seen: seen.clone(),
+    });
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg.resolve(src, base, 0).unwrap().is_some());
+    assert!(*seen.lock().unwrap() >= 1, "the base source was read");
+}
