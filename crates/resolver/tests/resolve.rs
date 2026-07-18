@@ -1,8 +1,7 @@
-//! Generic resolver tests: drive `Registry::resolve`, `walk`, and the snapshot
-//! view helpers with **fake probers over synthetic sources** — no concrete
-//! reader. These exercise every branch of the generic resolver that moved into
-//! core from the engine (the reader-wired `Vfs`/`default_registry` path stays in
-//! the orchestration layer).
+//! Generic resolver tests: drive the [`Resolve`] extension trait, `walk`, and the
+//! snapshot view helpers with **fake probers over synthetic sources** — no
+//! concrete reader. These exercise every branch of the generic resolver (the
+//! reader-wired `Vfs`/`default_registry` path stays in the orchestration layer).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -10,12 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use forensic_vfs::adapters::SubRange;
 use forensic_vfs::{
-    walk, Allocation, Confidence, ContainerDecoder, ContainerFormat, DirEntry, DirStream, DynFs,
-    DynSource, Evidence, FileId, FileSystem, FileSystemProbe, FsKind, FsMeta, ImageSource, Layer,
-    MacbTimes, NodeAddr, NodeKind, PathSpec, Registry, ResidencyKind, SectorSizes, SnapshotRef,
-    SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme,
-    VolumeSystem, VolumeSystemProbe,
+    Allocation, Confidence, ContainerDecoder, ContainerFormat, DirEntry, DirStream, DynFs,
+    DynSource, FileId, FileSystem, FileSystemProbe, FsKind, FsMeta, ImageSource, Layer, MacbTimes,
+    NodeAddr, NodeKind, PathSpec, Registry, ResidencyKind, SectorSizes, SnapshotRef, SniffWindow,
+    TimeZonePolicy, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem,
+    VolumeSystemProbe,
 };
+use forensic_vfs_resolver::{epoch_from_create_time, snapshot_view, walk, Evidence, Resolve};
 
 // --- doubles -------------------------------------------------------------
 
@@ -782,7 +782,7 @@ fn evidence_carries_a_root_locator_and_optional_fs() {
 #[test]
 fn epoch_from_create_time_round_trips_and_orders() {
     let t = 0x0123_4567_89ab_cdefu64;
-    let tag = forensic_vfs::epoch_from_create_time(t);
+    let tag = epoch_from_create_time(t);
     assert_eq!(&tag.0[0..24], &[0u8; 24], "high 24 bytes are zero");
     assert_eq!(
         u64::from_be_bytes(tag.0[24..32].try_into().unwrap()),
@@ -790,7 +790,7 @@ fn epoch_from_create_time_round_trips_and_orders() {
         "create_time round-trips out of the low 8 bytes"
     );
     assert!(
-        forensic_vfs::epoch_from_create_time(t + 1).0 > tag.0,
+        epoch_from_create_time(t + 1).0 > tag.0,
         "a later create_time yields a greater tag"
     );
 }
@@ -798,10 +798,10 @@ fn epoch_from_create_time_round_trips_and_orders() {
 #[test]
 fn snapshot_view_carries_epoch_and_snapshot_locator() {
     let base = PathSpec::os("/ev.dmg");
-    let v = forensic_vfs::snapshot_view(&base, 42, "daily".to_string(), 1000);
+    let v = snapshot_view(&base, 42, "daily".to_string(), 1000);
     assert_eq!(v.xid, 42);
     assert_eq!(v.name, "daily");
-    assert_eq!(v.epoch, forensic_vfs::epoch_from_create_time(1000));
+    assert_eq!(v.epoch, epoch_from_create_time(1000));
     assert!(matches!(
         v.locator.layer,
         Layer::Snapshot {

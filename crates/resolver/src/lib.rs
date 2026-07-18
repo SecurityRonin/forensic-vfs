@@ -1,23 +1,36 @@
+//! # forensic-vfs-resolver
+//!
 //! The generic layer resolver: sniff a byte source, match a registered prober,
 //! and descend container/volume/filesystem layers until a filesystem mounts.
 //!
 //! This is the reader-independent core of detection — it touches only the
-//! [`Registry`] prober traits and the layered [`PathSpec`]/[`Layer`] model, never
-//! a concrete reader. The orchestration layer wires concrete probers into a
-//! [`Registry`] (its `default_registry()`), resolves a base [`DynSource`] from a
-//! path (EWF-by-path vs a raw file), and offers the by-path `open`/snapshot API;
-//! everything below that — the recursion, the sniff windows, `walk`, and the
-//! snapshot *view* — lives here so any tool or test can drive it registry-first.
+//! [`forensic_vfs::Registry`] prober traits and the layered
+//! [`PathSpec`]/[`Layer`] model, never a concrete reader. It is deliberately
+//! split out of the [`forensic-vfs`](https://docs.rs/forensic-vfs) contract leaf
+//! so the *evolving detection behavior* (this crate) is firewalled from the
+//! *frozen contract* the fleet's reader crates pin.
+//!
+//! The orchestration layer (`forensic-vfs-engine`) wires concrete probers into a
+//! [`Registry`], resolves a base [`DynSource`] from a path (EWF-by-path vs a raw
+//! file), and offers the by-path `open`/snapshot API; everything below that — the
+//! recursion, the sniff windows, [`walk`], and the snapshot *view* — lives here so
+//! any tool or test can drive it registry-first.
+//!
+//! Because `resolve` cannot be an inherent method on the leaf's [`Registry`] from
+//! another crate (the orphan rule), it is exposed as the [`Resolve`] extension
+//! trait; bring it into scope and call `registry.resolve(source, spec, 0)`.
+
+// Tests may unwrap/expect freely; production code may not.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 use std::collections::HashSet;
 
 use state_history_forensic::epoch::EpochTag;
 
-use crate::fs::{DynFs, FileId, FileSystem, FsMeta, NodeKind};
-use crate::pathspec::{Layer, NodeAddr, PathSpec, SnapshotRef};
-use crate::registry::{Registry, SniffWindow};
-use crate::source::DynSource;
-use crate::VfsResult;
+use forensic_vfs::{
+    DynSource, FileId, FileSystem, FsMeta, Layer, NodeAddr, NodeKind, PathSpec, Registry,
+    SnapshotRef, SniffWindow, VfsResult,
+};
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
 const MAX_DEPTH: usize = 8;
@@ -41,7 +54,7 @@ pub struct Evidence {
     /// The locator this evidence was opened from.
     pub root: PathSpec,
     /// The mounted read-only filesystem, if detected.
-    pub fs: Option<DynFs>,
+    pub fs: Option<forensic_vfs::DynFs>,
 }
 
 /// One resolved layer stack: the mounted filesystem, its locator, and the byte
@@ -49,7 +62,7 @@ pub struct Evidence {
 /// base a snapshot layer is pushed onto).
 pub struct Resolved {
     /// The mounted read-only filesystem.
-    pub fs: DynFs,
+    pub fs: forensic_vfs::DynFs,
     /// The full locator, topped by the `fs:` layer.
     pub spec: PathSpec,
     /// The byte source the filesystem was mounted from.
@@ -58,7 +71,10 @@ pub struct Resolved {
     pub source_spec: PathSpec,
 }
 
-impl Registry {
+/// The generic layer resolver, exposed as an extension trait on the leaf's
+/// [`Registry`]. Bring it into scope (`use forensic_vfs_resolver::Resolve;`) to
+/// call `registry.resolve(source, spec, 0)`.
+pub trait Resolve {
     /// Recursively resolve a source to a filesystem: sniff its head (and a tail
     /// window for trailer magics); if a filesystem prober recognizes it, mount it;
     /// otherwise if a volume-system prober recognizes it, descend into each volume
@@ -73,7 +89,16 @@ impl Registry {
     /// # Errors
     /// Propagates a source read error, or a prober `open`/decode failure raised
     /// after a positive probe verdict.
-    pub fn resolve(
+    fn resolve(
+        &self,
+        source: DynSource,
+        spec: PathSpec,
+        depth: usize,
+    ) -> VfsResult<Option<Resolved>>;
+}
+
+impl Resolve for Registry {
+    fn resolve(
         &self,
         source: DynSource,
         spec: PathSpec,

@@ -45,7 +45,6 @@ pub mod fs;
 pub mod pathspec;
 pub mod read;
 pub mod registry;
-pub mod resolve;
 pub mod source;
 pub mod uri;
 pub mod volume;
@@ -62,9 +61,6 @@ pub use pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
 pub use registry::{
     Confidence, ContainerDecoder, ContainerFormat, CryptoProbe, FileSystemProbe, Registry,
     SniffWindow, VolumeSystemProbe,
-};
-pub use resolve::{
-    epoch_from_create_time, snapshot_view, walk, Evidence, Resolved, SnapshotView, WalkEntry,
 };
 pub use source::{read_exact_at, DynSource, Extent, Extents, ImageSource, SourceId, SourceView};
 pub use volume::{VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem};
