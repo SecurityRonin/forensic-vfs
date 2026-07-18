@@ -18,6 +18,8 @@ nav:
   - Home: index.md
   - Architecture: architecture.md
   - Validation: validation.md
+  - Reference:
+      - Design History: design-history.md
   - Privacy Policy: privacy.md
   - Terms of Service: terms.md
 
