@@ -55,7 +55,7 @@ cursor, allocate an unbounded buffer, or panic on hostile input.
 - **No mounting mechanism in the contract crate.** FUSE/inode adaptation lives in a
   separate consumer (`forensic-vfs-mount`); the contract knows nothing about inodes.
 - **No format detection in the leaf trait.** Probing is a separate concern
-  (`ContainerDecoder`/`VolumeSystemProbe`/`EncryptionProbe`/`FileSystemProbe` registry
+  (`ContainerOpen`/`VolumeSystemOpen`/`EncryptionOpen`/`FileSystemOpen` registry
   traits), so a leaf impl need not carry a sniffer.
 
 ## 4. The four contracts (as shipped)

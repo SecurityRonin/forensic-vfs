@@ -69,7 +69,7 @@ leaf. Therefore:
      draft feared, relocated). Delegate to `Registry::resolve`; keep the *separate* `open_base()`
      host bootstrap; add a golden-fixture test asserting `Vfs::open` produces the same resolved
      stack as a direct `Registry::resolve`.
-  2. **`Registry::resolve` descends filesystems/volumes/containers but NOT `EncryptionProbe`** — so the
+  2. **`Registry::resolve` descends filesystems/volumes/containers but NOT `EncryptionOpen`** — so the
      headline `E01 → GPT → BitLocker → NTFS` does not auto-resolve the encryption layer. Add a
      encryption-descent path (with `CredentialSource` injection).
 - **Behavioral-semver discipline for the resolver:** deterministic probe ordering, ambiguity

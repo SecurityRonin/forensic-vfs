@@ -1,18 +1,32 @@
 # Architecture
 
-`forensic-vfs` defines six transform kinds, each a trait. They are **not a
-fixed lane** — the engine's resolver applies them as a graph, because encryption,
+`forensic-vfs` defines **five layer-open traits**, each with two steps —
+`probe()` (recognize) then `open()` (peel) — and one orchestrator, **`SourceOpen`**
+(in `forensic-vfs-resolver`), which applies them as a **graph, not a fixed lane**:
+at each node it tries the five layer-opens and descends, because archive, encryption,
 volume, and container layers nest in any order on real evidence.
 
-```text
-PathSpec (recursive locator)
-   │ resolves (per-node transform graph, in the engine)
-   ▼
-ImageSource  ── the universal edge: read-only positioned bytes ──────────┐
-   ├── ContainerDecoder : E01/VMDK/VHDX/QCOW2/DMG/AFF4/AD1 → ImageSource  │  any of these
-   ├── VolumeSystem     : MBR/GPT/APM/VSS/APFS-container    → ImageSource  │  transforms may
-   ├── EncryptionLayer      : BitLocker/LUKS/FileVault          → ImageSource  │  apply, in any
-   └── FileSystem       : NTFS/ext4/HFS+/APFS/ISO/UDF/FAT   → FsNode tree  ┘  order, per node
+```mermaid
+flowchart TD
+    PS["PathSpec — recursive locator"]
+    SO["SourceOpen::open — the orchestrator (per-node graph)"]
+    IS["ImageSource — the universal edge: read-only positioned bytes"]
+    FN["FsNode tree — terminal"]
+
+    PS -->|resolves| SO
+    SO -->|tries the five layer-opens at each node| IS
+
+    IS --> CO["ContainerOpen — E01 / VMDK / VHDX / QCOW2 / DMG / AFF4"]
+    IS --> AO["ArchiveOpen — gz / bz2 / tar / zip / 7z"]
+    IS --> VO["VolumeSystemOpen — MBR / GPT / APM / VSS / APFS-container"]
+    IS --> EO["EncryptionOpen — BitLocker / LUKS / FileVault"]
+    IS --> FO["FileSystemOpen — NTFS / ext4 / HFS+ / APFS / ISO / FAT"]
+
+    CO -->|→ ImageSource, re-sniff| IS
+    EO -->|→ ImageSource, re-sniff| IS
+    AO -->|ArchiveContents: Stream → ImageSource · Members → N sources| IS
+    VO -->|→ N sub-sources| IS
+    FO -->|→ terminal| FN
 ```
 
 Example nestings a graph handles that a fixed lane would not:
