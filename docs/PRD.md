@@ -55,8 +55,8 @@ cursor, allocate an unbounded buffer, or panic on hostile input.
 - **No mounting mechanism in the contract crate.** FUSE/inode adaptation lives in a
   separate consumer (`forensic-vfs-mount`); the contract knows nothing about inodes.
 - **No format detection in the leaf trait.** Probing is a separate concern
-  (`ContainerOpen`/`VolumeSystemOpen`/`EncryptionOpen`/`FileSystemOpen` registry
-  traits), so a leaf impl need not carry a sniffer.
+  (the five `*Open` opener traits — `ContainerOpen`/`ArchiveOpen`/`VolumeSystemOpen`/
+  `EncryptionOpen`/`FileSystemOpen`), so a leaf impl need not carry a sniffer.
 
 ## 4. The four contracts (as shipped)
 
@@ -142,6 +142,9 @@ Grounded in a fleet-wide grep for `impl (ImageSource|FileSystem|VolumeSystem|Enc
 
 **`FileSystem` — 11 production impls:** ntfs, fat, ext4, apfs, hfsplus, xfs, iso9660, udf,
 zip, ad1, dar.
+- **zip / ad1 / dar are archive containers** exposed as `FileSystem` impls today; per
+  [ADR 0008](decisions/0008-archives-as-probes.md) they reclassify to `ArchiveOpen` →
+  `ArchiveContents` at the 0.4 cut (archive member trees stop masquerading as filesystems).
 - Crate exists, **no impl yet:** btrfs-forensic, zfs-forensic, refs-forensic.
 - **No crate at all:** exFAT, UFS, legacy (non-plus) HFS.
 

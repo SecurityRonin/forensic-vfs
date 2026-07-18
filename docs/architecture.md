@@ -1,32 +1,32 @@
 # Architecture
 
-`forensic-vfs` defines **five layer-open traits**, each with two steps —
-`probe()` (recognize) then `open()` (peel) — and one orchestrator, **`SourceOpen`**
-(in `forensic-vfs-resolver`), which applies them as a **graph, not a fixed lane**:
-at each node it tries the five layer-opens and descends, because archive, encryption,
-volume, and container layers nest in any order on real evidence.
+`forensic-vfs` defines **five layer-open traits**, each a two-step `probe()`
+(recognize) then `open()` (peel), plus one orchestrator, **`SourceOpen`** (in
+`forensic-vfs-resolver`). The diagram lays the layers out in their **normal nesting
+order** — an archive wraps a container, which holds a partition table, which may hold an
+encrypted volume, which holds a filesystem. But `SourceOpen` is a **graph, not a fixed
+pipeline**: every non-terminal peel yields an `ImageSource` that **re-enters** resolution,
+so unusual real-evidence stacks (`raw → LUKS → LVM → ext4`, an archive inside a filesystem,
+encryption that is container metadata) resolve by re-entry, in any order.
 
 ```mermaid
 flowchart TD
-    PS["PathSpec — recursive locator"]
-    SO["SourceOpen::open — the orchestrator (per-node graph)"]
-    IS["ImageSource — the universal edge: read-only positioned bytes"]
-    FN["FsNode tree — terminal"]
+    SRC(["Evidence — a path or bytes"])
+    SRC --> IS
+    IS["<b>ImageSource</b> — read-only positioned bytes<br/>the one edge every layer consumes, and each peel re-produces"]
+    IS --> A
 
-    PS -->|resolves| SO
-    SO -->|tries the five layer-opens at each node| IS
+    A["<b>1 · ArchiveOpen</b> — peel packaging<br/>gz · bz2 · tar · zip · clbx · 7z · AD1 · DAR"]
+    C["<b>2 · ContainerOpen</b> — decode the acquisition image<br/>E01 · VMDK · VHD · VHDX · QCOW2 · DMG · AFF4 · raw"]
+    V["<b>3 · VolumeSystemOpen</b> — walk the partition table<br/>MBR · GPT · APM"]
+    E["<b>4 · EncryptionOpen</b> — unlock the volume<br/>BitLocker · LUKS · FileVault · VeraCrypt"]
+    F["<b>5 · FileSystemOpen</b> — mount the filesystem<br/>NTFS · FAT · ext4 · XFS · btrfs · APFS · HFS+ · UFS · ISO9660 · UDF"]
+    A --> C --> V --> E --> F
+    F --> FN["<b>FsNode tree</b> — files · data streams · MACB metadata"]
 
-    IS --> CO["ContainerOpen — E01 / VMDK / VHDX / QCOW2 / DMG / AFF4"]
-    IS --> AO["ArchiveOpen — gz / bz2 / tar / zip / 7z"]
-    IS --> VO["VolumeSystemOpen — MBR / GPT / APM / VSS / APFS-container"]
-    IS --> EO["EncryptionOpen — BitLocker / LUKS / FileVault"]
-    IS --> FO["FileSystemOpen — NTFS / ext4 / HFS+ / APFS / ISO / FAT"]
-
-    CO -->|→ ImageSource, re-sniff| IS
-    EO -->|→ ImageSource, re-sniff| IS
-    AO -->|ArchiveContents: Stream → ImageSource · Members → N sources| IS
-    VO -->|→ N sub-sources| IS
-    FO -->|→ terminal| FN
+    A -. "Members → N members re-enter" .-> IS
+    C -. "peeled source re-enters" .-> IS
+    E -. "decrypted source re-enters" .-> IS
 ```
 
 Example nestings a graph handles that a fixed lane would not:
