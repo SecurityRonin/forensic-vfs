@@ -65,6 +65,10 @@ pub enum Layer {
     Fs { kind: FsKind, at: NodeAddr },
     /// A named data stream (ADS / resource fork) of the addressed node.
     Stream { id: StreamId },
+    /// A peeled archive/compression wrapper. `member: None` is a 1→1 stream peel
+    /// (a bare gzip/bzip2 wrapper re-entering resolution like a container decode);
+    /// `member: Some(i)` is the `i`-th member of a multi-member archive (tar/zip/7z).
+    Archive { member: Option<usize> },
 }
 
 /// The recursive locator. Constructed via [`PathSpec::os`] + [`PathSpec::push`],

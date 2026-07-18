@@ -336,6 +336,11 @@ fn layer_encode(l: &Layer) -> String {
         },
         Layer::Fs { kind, at } => format!("fs:{},{}", kind.as_str(), node_addr_encode(at)),
         Layer::Stream { id } => format!("stream:{}", stream_token(*id)),
+        // `archive:` (empty body) = a 1→1 stream peel; `archive:<i>` = member `i`.
+        Layer::Archive { member } => match member {
+            None => "archive:".to_string(),
+            Some(i) => format!("archive:{i}"),
+        },
     }
 }
 
@@ -470,6 +475,10 @@ impl fmt::Display for PathSpec {
                     NodeAddr::File(id) => write!(f, "{}#{}", kind.as_str(), file_id_token(*id))?,
                 },
                 Layer::Stream { id } => write!(f, ":{}", stream_token(*id))?,
+                Layer::Archive { member } => match member {
+                    None => write!(f, "archive")?,
+                    Some(i) => write!(f, "archive#{i}")?,
+                },
             }
         }
         Ok(())
@@ -599,6 +608,21 @@ mod tests {
         ] {
             roundtrip(&PathSpec::os("/x").push(Layer::Stream { id: s }));
         }
+    }
+
+    #[test]
+    fn archive_layer_round_trips() {
+        // `None` = a 1→1 stream peel (bare gz/bz2); `Some(i)` = the i-th member of
+        // a multi-member archive. Both must survive the canonical URI byte-for-byte.
+        roundtrip(&PathSpec::os("/case.tgz").push(Layer::Archive { member: None }));
+        roundtrip(&PathSpec::os("/case.zip").push(Layer::Archive { member: Some(3) }));
+        roundtrip(&PathSpec::os("/case.zip").push(Layer::Archive { member: Some(0) }));
+    }
+
+    #[test]
+    fn from_uri_rejects_malformed_archive_member() {
+        // A non-numeric archive member index is a hard reject, never a panic.
+        assert!(PathSpec::from_uri("fvfs:archive:notanumber").is_err());
     }
 
     #[test]
