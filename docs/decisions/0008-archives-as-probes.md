@@ -14,7 +14,7 @@ on-ramp bolted in front of the resolver — the exact "N parallel detection stac
 in N consumers" smell the VFS abstraction exists to remove.
 
 The question this ADR settles: **how do archives become a first-class VFS layer so
-they ride the same recursive `resolve()` as every other layer — without dragging a
+they ride the same recursive `open()` as every other layer — without dragging a
 single decoder or compression dependency into the zero-dependency leaf?**
 
 Two facts from the settled post-engine-retirement architecture (ADR 0007, commit
@@ -38,7 +38,7 @@ Two facts from the settled post-engine-retirement architecture (ADR 0007, commit
 trait for the archive layer, matching every other layer's single `probe() + open()`
 shape. This revises the earlier framing of this ADR ("archives need no new trait";
 gz/bz2 mapped onto `ContainerOpen`, tar/zip/7z onto `FileSystemOpen`, and `.tgz` was
-an emergent `GzipDecoder ∘ TarProbe` composition); git history holds that original. Three
+an emergent gz-decode ∘ tar-parse composition); git history holds that original. Three
 reasons drove the change:
 
 1. **One-layer-one-trait consistency.** The VFS gives container, volume, encryption, and
@@ -59,28 +59,28 @@ trait ArchiveOpen {
 
 enum ArchiveContents {
     Stream(DynSource),     // 1→1: a bare gz/bz2 wrapper; the decoded source
-                           //      re-enters `resolve()` exactly like a decode
+                           //      re-enters `open()` exactly like a decode
     Members(Vec<Member>),  // 1→N: tar/zip/7z; each member's `source_for(member)`
-                           //      re-enters `resolve()`
+                           //      re-enters `open()`
 }
 ```
 
 - **Bare compression wrappers (gzip, bzip2) → `ArchiveContents::Stream`** (1→1). `open` peels
   the outer stream to the inner `DynSource`; the resolver re-sniffs it, so
-  `E01.gz → E01 → GPT → NTFS` collapses in a single `resolve()` call, identically to
+  `E01.gz → E01 → GPT → NTFS` collapses in a single `open()` call, identically to
   `E01 → GPT → NTFS` — the peel re-enters resolution just like a container decode.
 - **Multi-member archives (tar, zip/`.clbx`, 7z) → `ArchiveContents::Members`** (1→N). `open`
   returns the member table; a member that is itself evidence (an `E01` inside a `.zip`) is
-  reached by `source_for(member)` and re-entering `resolve()` on that member's `DynSource`.
+  reached by `source_for(member)` and re-entering `open()` on that member's `DynSource`.
 - **`.tgz`/`.tbz2` are handled INSIDE the probe.** gz+tar and bz2+tar are the archive
   crate's own combo knowledge — a single fused streaming peel (see the O(n) requirement
-  below), not an emergent `GzipProbe ∘ TarProbe` chain the resolver composes. The crate
+  below), not an emergent gz-decode ∘ tar-parse chain the resolver composes. The crate
   owns the combination in one place.
 
 **The resolver gains a dedicated archive descent.** Alongside its container / volume /
-encryption / filesystem descents, `resolve()` tries the registered `ArchiveOpen`s:
+encryption / filesystem descents, `open()` tries the registered `ArchiveOpen`s:
 `ArchiveContents::Stream` → recurse on the decoded source; `ArchiveContents::Members` → each
-member re-enters `resolve()`. Archives resolve as a peer layer, not bolted in front of the
+member re-enters `open()`. Archives resolve as a peer layer, not bolted in front of the
 resolver.
 
 **The leaf stays a pure contract.** The only leaf change is additive and non-breaking: the
@@ -100,7 +100,7 @@ Openers::new()
 ## Consequences
 
 - **One detection on-ramp.** Once the adapter is registered, `disk-forensic` and
-  `4n6mount` drop their pre-resolver `peel_archive` call: `resolve()` peels archives
+  `4n6mount` drop their pre-resolver `peel_archive` call: `open()` peels archives
   as ordinary layers, so every current and future VFS consumer gets archive
   transparency for free, with no per-consumer archive code.
 - **Zero dependency inversion.** The dependency arrow stays pointed *down onto* the
@@ -135,7 +135,7 @@ Decompose the cost honestly. Three parts, and only one is avoidable:
 So the realization is a **fused streaming decoder**, not the naive composition. The
 determination "tgz = gzip+tar" stays the conceptual *model*; the *implementation* is a
 single pass that decompresses and selects in lock-step, giving O(n) time, O(evidence)
-temp, O(1) RAM. `resolve()` then re-enters on the temp-backed `DynSource` (→ GPT → NTFS)
+temp, O(1) RAM. `open()` then re-enters on the temp-backed `DynSource` (→ GPT → NTFS)
 for the random access that forensic analysis needs — paid once, against the temp file,
 not by re-decompressing on every seek.
 
@@ -211,7 +211,7 @@ file name is not an input to any classification.
    one probe beside the volume/filesystem probes (MBR `55 AA`@510, GPT `EFI PART`@512, NTFS@3,
    ext `0xEF53`@1080, APFS `NXSB`@32, HFS+@1024, ISO `CD001`@32769). So the answer is *positive*
    ("the inner is a GPT disk / NTFS volume / nested zip / tar / unknown"), not "not a tar." This
-   is literally the recursive `resolve()` re-sniff; **archive-core owns packing detection only**,
+   is literally the recursive `open()` re-sniff; **archive-core owns packing detection only**,
    and the forensic magics stay in the VFS volume/filesystem probes (knowledge from
    forensicnomicon) — archive-core grows no filesystem knowledge.
 4. **Prefer the most-seekable `Access` the codec allows — everywhere, not one case.** The ladder,
@@ -251,14 +251,14 @@ classifies which before `peel` executes (see the `AccessPlan` variants above):
 
 1. **One evidence member** (`case.zip` holding only `case.E01`). `detect` → `Member`;
    `ArchiveContents::Members` yields the single member, whose `source_for(member)` re-enters
-   `resolve()` and collapses `case.zip → E01 → GPT → NTFS` in one pass. With a single
+   `open()` and collapses `case.zip → E01 → GPT → NTFS` in one pass. With a single
    archive descent there is no filesystem-before-container ambiguity to arbitrate — the old
    "does a `FileSystemOpen` mount a one-entry tree instead of collapsing?" question
    disappears under the unified `ArchiveOpen`.
 
 2. **Several independent evidence items** (a zip of unrelated `a.E01`, `b.vmdk`, `c.dd`).
    `detect` → `Collection`; `ArchiveContents::Members` hands back the whole set, and each member
-   re-enters `resolve()` on its own.
+   re-enters `open()` on its own.
 
 3. **A segmented set that is ONE logical image** (`{case.E01, case.E02, … case.E0N}`, or
    split raw `.001/.002…`, or split VMDK `disk-s001.vmdk…` + descriptor). `detect` →
@@ -268,7 +268,7 @@ classifies which before `peel` executes (see the `AccessPlan` variants above):
    the `.E01` member needs a path to its siblings: `peel` binds a **sibling-member provider**
    to the archive — exactly the seam `ewf`'s `SegmentBacking` already provides for on-disk
    `.E01/.E02` and for E01-in-zip (the cross-format `open_zip` work). The reassembled logical
-   `DynSource` then re-enters `resolve()` → GPT → NTFS as usual.
+   `DynSource` then re-enters `open()` → GPT → NTFS as usual.
 
 Consequence for the contract: all three cases ride the archive descent; **case 3
 additionally binds the segment reader's sibling-backing inside `peel`**, reusing the
