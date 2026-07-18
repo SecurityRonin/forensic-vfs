@@ -39,7 +39,7 @@ const MAX_DEPTH: usize = 8;
 /// magics — notably the ISO 9660 Primary Volume Descriptor (`CD001` at byte
 /// offset 32769, LBA 16). NTFS/ext4/MBR/GPT/container magics all sit in the
 /// first few KiB, so the larger window is a strict superset. One bounded read.
-const SNIFF_CAP: u64 = 40 * 1024;
+const SNIFF_CAP: u64 = 128 * 1024;
 
 /// Bytes read into the *tail* sniff window from the end of the source. Sized to
 /// cover trailer signatures like the DMG `koly` footer (at `total_len - 512`).
