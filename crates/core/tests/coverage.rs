@@ -287,6 +287,7 @@ fn from_uri_rejects_every_malformed_layer() {
         "fvfs:os:x|fs:ntfs,f/ntfsref",     // file id missing fields
         "fvfs:os:x|fs:ntfs,f/ntfsref.x.1", // file id non-numeric
         "fvfs:os:x|stream:zzz",
+        "fvfs:os:x|archive:notanumber", // archive member index must be numeric
     ] {
         assert!(PathSpec::from_uri(bad).is_err(), "should reject: {bad}");
     }
@@ -315,7 +316,8 @@ fn display_renders_every_layer_kind() {
         })
         .push(Layer::Stream {
             id: StreamId::Named(3),
-        });
+        })
+        .push(Layer::Archive { member: Some(2) });
     let human = format!("{spec}");
     for needle in [
         "range[0+512]",
@@ -324,9 +326,13 @@ fn display_renders_every_layer_kind() {
         "vss#1",
         "ntfs#",
         ":named.3",
+        "archive#2",
     ] {
         assert!(human.contains(needle), "missing {needle} in {human}");
     }
+    // The bare-stream (member: None) archive Display arm.
+    let stream = PathSpec::os("/x").push(Layer::Archive { member: None });
+    assert!(format!("{stream}").contains("archive"));
     // The apfs snapshot Display arm.
     let apfs = PathSpec::os("/x").push(Layer::Snapshot {
         store: SnapshotRef::ApfsXid(77),

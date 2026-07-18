@@ -404,6 +404,13 @@ fn layer_parse(s: &str) -> VfsResult<Layer> {
         "stream" => Ok(Layer::Stream {
             id: parse_stream(body, s)?,
         }),
+        "archive" => Ok(Layer::Archive {
+            member: if body.is_empty() {
+                None
+            } else {
+                Some(usize_field(body, s)?)
+            },
+        }),
         _ => Err(err("unknown layer tag", s)),
     }
 }
