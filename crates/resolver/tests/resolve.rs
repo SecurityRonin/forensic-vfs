@@ -9,11 +9,11 @@ use std::sync::{Arc, Mutex};
 
 use forensic_vfs::adapters::SubRange;
 use forensic_vfs::{
-    Allocation, Confidence, ContainerFormat, ContainerOpen, DirEntry, DirStream, DynFs, DynSource,
-    FileId, FileSystem, FileSystemOpen, FsKind, FsMeta, ImageSource, Layer, MacbTimes, NodeAddr,
-    NodeKind, Openers, PathSpec, ResidencyKind, SectorSizes, SnapshotRef, SniffWindow,
-    TimeZonePolicy, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem,
-    VolumeSystemOpen,
+    Allocation, ArchiveContents, ArchiveOpen, Confidence, ContainerFormat, ContainerOpen, DirEntry,
+    DirStream, DynFs, DynSource, FileId, FileSystem, FileSystemOpen, FsKind, FsMeta, ImageSource,
+    Layer, MacbTimes, Member, NodeAddr, NodeKind, Openers, PathSpec, ResidencyKind, SectorSizes,
+    SnapshotRef, SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc, VolumeKind,
+    VolumeScheme, VolumeSystem, VolumeSystemOpen,
 };
 use forensic_vfs_resolver::{epoch_from_create_time, snapshot_view, walk, Evidence, SourceOpen};
 
@@ -280,6 +280,39 @@ impl ContainerOpen for FakeContainer {
     }
 }
 
+/// An archive peeler keyed on a head magic. `members = false` yields a 1→1
+/// [`ArchiveContents::Stream`] over a sub-window of the source (a bare gz/bz2
+/// wrapper); `members = true` yields a single-entry
+/// [`ArchiveContents::Members`] whose member is that same sub-window (an
+/// evidence file inside a tar/zip/7z).
+struct FakeArchive {
+    magic: &'static [u8],
+    members: bool,
+    inner: (u64, u64),
+}
+impl ArchiveOpen for FakeArchive {
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        if w.has_magic(0, self.magic) {
+            Confidence::Yes {
+                how: "fake archive",
+            }
+        } else {
+            Confidence::No
+        }
+    }
+    fn open(&self, src: DynSource) -> VfsResult<ArchiveContents> {
+        let inner: DynSource = Arc::new(SubRange::new(src, self.inner.0, self.inner.1));
+        if self.members {
+            Ok(ArchiveContents::Members(vec![Member {
+                name: b"case.img".to_vec(),
+                source: inner,
+            }]))
+        } else {
+            Ok(ArchiveContents::Stream(inner))
+        }
+    }
+}
+
 // --- resolve branches ----------------------------------------------------
 
 #[test]
@@ -455,6 +488,122 @@ fn a_container_whose_payload_holds_no_fs_falls_through_to_none() {
         });
     let mut data = b"CONT".to_vec();
     data.resize(4096, 0); // payload after offset 16 is all zeros -> no fs
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg.open(mem(data), base, 0).unwrap().is_none());
+}
+
+#[test]
+fn descends_an_archive_stream_into_its_filesystem() {
+    // A bare-wrapper archive (1→1): its Stream peel exposes the fs magic at an
+    // inner offset. The locator must carry a bare `Layer::Archive { member: None }`.
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .archive(FakeArchive {
+            magic: b"GZIP",
+            members: false,
+            inner: (16, 8192),
+        });
+    let mut data = b"GZIP".to_vec();
+    data.resize(16, 0);
+    data.extend_from_slice(b"FSFS"); // fs magic at the decoded stream's start
+    data.resize(16 + 8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .open(mem(data), base, 0)
+        .unwrap()
+        .expect("mounts fs inside an archive stream");
+    let uri = out.spec.to_uri();
+    assert!(uri.contains("archive:") && uri.contains("fs:"), "{uri}");
+    // The 1→1 peel carries no member index.
+    assert!(
+        out.spec
+            .layers()
+            .iter()
+            .any(|l| matches!(l, Layer::Archive { member: None })),
+        "{uri}"
+    );
+}
+
+#[test]
+fn descends_an_archive_member_into_its_filesystem() {
+    // A multi-member archive (1→N): the single member's source exposes the fs
+    // magic. The locator must carry `Layer::Archive { member: Some(0) }`.
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .archive(FakeArchive {
+            magic: b"ZIPM",
+            members: true,
+            inner: (16, 8192),
+        });
+    let mut data = b"ZIPM".to_vec();
+    data.resize(16, 0);
+    data.extend_from_slice(b"FSFS");
+    data.resize(16 + 8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .open(mem(data), base, 0)
+        .unwrap()
+        .expect("mounts fs inside an archive member");
+    let uri = out.spec.to_uri();
+    assert!(
+        out.spec
+            .layers()
+            .iter()
+            .any(|l| matches!(l, Layer::Archive { member: Some(0) })),
+        "{uri}"
+    );
+}
+
+#[test]
+fn an_archive_stream_holding_no_fs_falls_through_to_none() {
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .archive(FakeArchive {
+            magic: b"GZIP",
+            members: false,
+            inner: (16, 4096),
+        });
+    let mut data = b"GZIP".to_vec();
+    data.resize(4096, 0); // decoded stream is all zeros -> no fs
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg.open(mem(data), base, 0).unwrap().is_none());
+}
+
+#[test]
+fn an_archive_member_holding_no_fs_falls_through_to_none() {
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .archive(FakeArchive {
+            magic: b"ZIPM",
+            members: true,
+            inner: (16, 4096),
+        });
+    let mut data = b"ZIPM".to_vec();
+    data.resize(4096, 0); // the member is all zeros -> no fs
     let base = PathSpec::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
