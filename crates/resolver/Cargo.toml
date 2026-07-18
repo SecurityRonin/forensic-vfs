@@ -1,6 +1,6 @@
 [package]
 name         = "forensic-vfs-resolver"
-version      = "0.1.1"
+version      = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 description  = "The generic layer resolver over the forensic-vfs contracts: sniff a byte source, match a registered prober, and descend container/volume/filesystem layers until a filesystem mounts — the evolving detection behavior, firewalled from the frozen forensic-vfs contract leaf"

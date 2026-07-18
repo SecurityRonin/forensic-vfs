@@ -28,8 +28,8 @@ use std::collections::HashSet;
 use state_history_forensic::epoch::EpochTag;
 
 use forensic_vfs::{
-    DynSource, FileId, FileSystem, FsMeta, Layer, NodeAddr, NodeKind, Openers, PathSpec,
-    SnapshotRef, SniffWindow, VfsResult,
+    ArchiveContents, DynSource, FileId, FileSystem, FsMeta, Layer, NodeAddr, NodeKind, Openers,
+    PathSpec, SnapshotRef, SniffWindow, VfsResult,
 };
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
@@ -153,6 +153,37 @@ impl SourceOpen for Openers {
                 });
                 if let Some(found) = self.open(decoded, child, depth + 1)? {
                     return Ok(Some(found));
+                }
+            }
+        }
+        // Archive descent (ADR 0008): a bare gz/bz2 wrapper peels to a single
+        // decoded stream (1→1) that re-enters resolution like a container decode;
+        // a multi-member archive peels to a member table (1→N) whose members each
+        // re-enter. The member index selected is carried in the locator via
+        // `Layer::Archive { member }`, mirroring the volume-system multi-volume
+        // descent (first sub-source that resolves to a filesystem wins).
+        for ar in self.archives() {
+            if ar.probe(&window).is_candidate() {
+                match ar.open(source.clone())? {
+                    ArchiveContents::Stream(inner) => {
+                        let child = spec.clone().push(Layer::Archive { member: None });
+                        if let Some(found) = self.open(inner, child, depth + 1)? {
+                            return Ok(Some(found));
+                        }
+                    }
+                    ArchiveContents::Members(members) => {
+                        for (index, member) in members.into_iter().enumerate() {
+                            let child = spec.clone().push(Layer::Archive {
+                                member: Some(index),
+                            });
+                            if let Some(found) = self.open(member.source, child, depth + 1)? {
+                                return Ok(Some(found));
+                            }
+                        }
+                    }
+                    // A future `#[non_exhaustive]` ArchiveContents variant this
+                    // resolver predates: fall through like an unrecognized source.
+                    _ => {} // cov:unreachable: no other ArchiveContents variant exists today
                 }
             }
         }
