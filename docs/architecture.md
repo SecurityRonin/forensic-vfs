@@ -71,8 +71,8 @@ never stored in the address.
 
 | Crate | Role | Status |
 |---|---|---|
-| **`forensic-vfs`** | byte source, volume/encryption/filesystem traits, `PathSpec`, registry contracts | this crate |
-| `forensic-vfs-engine` | registry + graph resolver + concurrent block cache, depending down on every reader | planned |
+| **`forensic-vfs`** | byte source, volume/encryption/filesystem traits, `PathSpec`, openers contracts | this crate |
+| `forensic-vfs-engine` | openers + graph resolver + concurrent block cache, depending down on every reader | planned |
 | `disk-forensic` / `disk4n6` | thin CLI over the engine | evolving |
 
 Phasing (each step gated on the Case-001 Szechuan ingest, no regression): extract
