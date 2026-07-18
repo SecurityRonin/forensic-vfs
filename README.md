@@ -11,7 +11,7 @@
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![Security audit](https://img.shields.io/badge/security-audit-brightgreen.svg)](https://github.com/SecurityRonin/forensic-vfs/actions/workflows/ci.yml)
 
-**One read-only, positioned-read byte edge — `ImageSource` — that every archive, container, volume, encryption, and filesystem reader in the fleet speaks, so a whole evidence stack (`case.7z → E01 → GPT → BitLocker → NTFS`) composes as a single `Arc<dyn ImageSource>` that N workers read in parallel and no code path can write.**
+**One read-only, positioned-read byte edge — `ImageSource` — that every archive, container, volume, encryption, and filesystem reader in the fleet speaks, so a whole evidence stack (`case.zip → E01 → GPT → BitLocker → NTFS`) composes as a single `Arc<dyn ImageSource>` that N workers read in parallel and no code path can write.**
 
 Building forensic tooling in Rust? `forensic-vfs` is the read-only byte-and-filesystem contract every reader in the fleet plugs into. Write a reader **once** and get parallel reads, recursive container/archive/volume/encryption/filesystem composition, and a serializable evidence locator for free.
 
@@ -173,7 +173,7 @@ Because `open()` re-enters per layer and per member, the *depth is discovered by
 case.7z of loose documents
   └─ ArchiveOpen → Members → each member is a leaf file            (shallow)
 
-case.7z holding case.E01
+case.zip holding case.E01
   └─ ArchiveOpen → Members → member re-enters SourceOpen:
        ContainerOpen(EWF) → VolumeSystemOpen(GPT)
          → EncryptionOpen(BitLocker) → FileSystemOpen(NTFS) → file tree   (deep)
