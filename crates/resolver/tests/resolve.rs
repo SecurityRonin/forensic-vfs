@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use forensic_vfs::adapters::SubRange;
 use forensic_vfs::{
-    Allocation, ArchiveContents, ArchiveOpen, Confidence, ContainerFormat, ContainerOpen, DirEntry,
-    DirStream, DynFs, DynSource, FileId, FileSystem, FileSystemOpen, FsKind, FsMeta, ImageSource,
-    Layer, MacbTimes, Member, NodeAddr, NodeKind, Openers, PathSpec, ResidencyKind, SectorSizes,
-    SnapshotRef, SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc, VolumeKind,
-    VolumeScheme, VolumeSystem, VolumeSystemOpen,
+    Allocation, ArchiveContents, ArchiveOpen, Confidence, ContainerFormat, ContainerOpen,
+    CredentialSource, DirEntry, DirStream, DynFs, DynSource, EncryptionLayer, EncryptionOpen,
+    EncryptionScheme, FileId, FileSystem, FileSystemOpen, FsKind, FsMeta, ImageSource, Layer,
+    MacbTimes, Member, NoCredentials, NodeAddr, NodeKind, Openers, PathSpec, ResidencyKind,
+    SectorSizes, SnapshotRef, SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc,
+    VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemOpen,
 };
 use forensic_vfs_resolver::{epoch_from_create_time, snapshot_view, walk, Evidence, SourceOpen};
 
@@ -313,6 +314,77 @@ impl ArchiveOpen for FakeArchive {
     }
 }
 
+/// The FDE detection model a [`FakeEncProbe`] emulates.
+enum FakeVerdict {
+    /// Signature-detectable (BitLocker/LUKS/FileVault): `probe` returns
+    /// `Yes` on the head magic.
+    Signature(&'static [u8]),
+    /// Signature-less (VeraCrypt): `probe` can only ever return `Maybe`.
+    CredentialAttempt,
+}
+
+/// The decrypted view a fake encryption layer presents. `open(creds)` yields a
+/// sub-window of the ciphertext source when `inner` is `Some` (a successful
+/// decrypt), and errors loud when `None` (a bad/absent key).
+struct FakeEncLayer {
+    scheme: EncryptionScheme,
+    src: DynSource,
+    inner: Option<(u64, u64)>,
+    attempts: Arc<Mutex<usize>>,
+}
+impl EncryptionLayer for FakeEncLayer {
+    fn scheme(&self) -> EncryptionScheme {
+        self.scheme
+    }
+    fn open(&self, _creds: &dyn CredentialSource) -> VfsResult<DynSource> {
+        *self.attempts.lock().unwrap() += 1;
+        match self.inner {
+            Some((start, len)) => Ok(Arc::new(SubRange::new(self.src.clone(), start, len))),
+            None => Err(VfsError::Decode {
+                layer: "fake-enc",
+                offset: 0,
+                detail: "bad key".to_string(),
+                bytes: forensic_vfs::SmallHex::new(&[]),
+            }),
+        }
+    }
+}
+
+/// An encryption prober in one of the two FDE models. `attempts` counts the
+/// number of times its layer's `open(creds)` decrypt was actually driven, so a
+/// test can assert a credential-attempt scheme was (or was not) reached.
+struct FakeEncProbe {
+    scheme: EncryptionScheme,
+    verdict: FakeVerdict,
+    inner: Option<(u64, u64)>,
+    attempts: Arc<Mutex<usize>>,
+}
+impl EncryptionOpen for FakeEncProbe {
+    fn scheme(&self) -> EncryptionScheme {
+        self.scheme
+    }
+    fn probe(&self, w: &SniffWindow) -> Confidence {
+        match self.verdict {
+            FakeVerdict::Signature(magic) => {
+                if w.has_magic(0, magic) {
+                    Confidence::Yes { how: "fake enc" }
+                } else {
+                    Confidence::No
+                }
+            }
+            FakeVerdict::CredentialAttempt => Confidence::Maybe,
+        }
+    }
+    fn open(&self, src: DynSource) -> VfsResult<Box<dyn EncryptionLayer>> {
+        Ok(Box::new(FakeEncLayer {
+            scheme: self.scheme,
+            src,
+            inner: self.inner,
+            attempts: self.attempts.clone(),
+        }))
+    }
+}
+
 // --- resolve branches ----------------------------------------------------
 
 #[test]
@@ -609,6 +681,229 @@ fn an_archive_member_holding_no_fs_falls_through_to_none() {
         len: data.len() as u64,
     });
     assert!(reg.open(mem(data), base, 0).unwrap().is_none());
+}
+
+// --- encryption descent (ADR 0010) ---------------------------------------
+
+#[test]
+fn descends_a_signature_encryption_layer_into_its_filesystem() {
+    // A BitLocker-style signature layer: probe says Yes on the head magic, and its
+    // decrypt reveals the fs magic at an inner offset. The locator must gain a
+    // Layer::Encryption node above the fs: layer.
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::Bitlocker,
+            verdict: FakeVerdict::Signature(b"BDE!"),
+            inner: Some((512, 8192)),
+            attempts: Arc::new(Mutex::new(0)),
+        });
+    let mut data = b"BDE!".to_vec();
+    data.resize(512, 0);
+    data.extend_from_slice(b"FSFS"); // fs magic at the decrypted volume's start
+    data.resize(512 + 8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .open_with_credentials(mem(data), base, 0, &NoCredentials)
+        .unwrap()
+        .expect("mounts fs behind a signature encryption layer");
+    let uri = out.spec.to_uri();
+    assert!(
+        uri.contains("encryption:bitlocker") && uri.contains("fs:"),
+        "{uri}"
+    );
+    assert!(
+        out.spec.layers().iter().any(|l| matches!(
+            l,
+            Layer::Encryption {
+                scheme: EncryptionScheme::Bitlocker
+            }
+        )),
+        "{uri}"
+    );
+}
+
+#[test]
+fn a_signature_encryption_whose_decrypt_fails_propagates_loud() {
+    // A positive (Yes) verdict is an identification: a failed decrypt (wrong/absent
+    // key) must fail loud, never masquerade as a clean unknown None.
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::Luks1,
+            verdict: FakeVerdict::Signature(b"LUKS"),
+            inner: None, // decrypt errors
+            attempts: Arc::new(Mutex::new(0)),
+        });
+    let mut data = b"LUKS".to_vec();
+    data.resize(8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg
+        .open_with_credentials(mem(data), base, 0, &NoCredentials)
+        .is_err());
+}
+
+#[test]
+fn a_credential_attempt_scheme_never_shadows_a_real_filesystem() {
+    // A VeraCrypt-style Maybe scheme must be a LAST RESORT: a plaintext filesystem
+    // at the top claims the source first, so the credential-attempt decrypt is
+    // never even driven (attempts stays 0) and no encryption layer is recorded.
+    let attempts = Arc::new(Mutex::new(0usize));
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::VeraCrypt,
+            verdict: FakeVerdict::CredentialAttempt,
+            inner: Some((0, 8192)), // would "succeed" if it were ever attempted
+            attempts: attempts.clone(),
+        });
+    let mut data = b"FSFS".to_vec();
+    data.resize(8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .open_with_credentials(mem(data), base, 0, &NoCredentials)
+        .unwrap()
+        .expect("plaintext fs mounts directly");
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        0,
+        "a credential-attempt scheme must not be tried while a real fs claims the source"
+    );
+    assert!(
+        !out.spec
+            .layers()
+            .iter()
+            .any(|l| matches!(l, Layer::Encryption { .. })),
+        "no encryption layer belongs in a plaintext stack"
+    );
+}
+
+#[test]
+fn a_credential_attempt_scheme_descends_as_a_last_resort() {
+    // Nothing else recognizes the source; the Maybe scheme is attempted last, its
+    // decrypt reveals an fs, and the stack records Layer::Encryption{VeraCrypt}.
+    let attempts = Arc::new(Mutex::new(0usize));
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::VeraCrypt,
+            verdict: FakeVerdict::CredentialAttempt,
+            inner: Some((512, 8192)),
+            attempts: attempts.clone(),
+        });
+    // The head carries no fs/container/volume magic; only the decrypted view does.
+    let mut data = vec![0u8; 512];
+    data.extend_from_slice(b"FSFS");
+    data.resize(512 + 8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .open_with_credentials(mem(data), base, 0, &NoCredentials)
+        .unwrap()
+        .expect("veracrypt decrypts to a mountable fs");
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        1,
+        "the last-resort decrypt ran once"
+    );
+    assert!(
+        out.spec.layers().iter().any(|l| matches!(
+            l,
+            Layer::Encryption {
+                scheme: EncryptionScheme::VeraCrypt
+            }
+        )),
+        "{}",
+        out.spec.to_uri()
+    );
+}
+
+#[test]
+fn a_credential_attempt_whose_decrypt_fails_falls_through_to_none() {
+    // A failed Maybe decrypt (not this scheme / wrong creds) is indistinguishable
+    // from random data: it must fall through to None, never break the empty-source
+    // contract by erroring on every unrecognized blob.
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::VeraCrypt,
+            verdict: FakeVerdict::CredentialAttempt,
+            inner: None, // decrypt fails
+            attempts: Arc::new(Mutex::new(0)),
+        });
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: 4096,
+    });
+    assert!(reg
+        .open_with_credentials(mem(vec![0u8; 4096]), base, 0, &NoCredentials)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn plain_open_delegates_through_no_credentials_and_still_descends_encryption() {
+    // The retained no-credential `open` entry point delegates to
+    // open_with_credentials(&NoCredentials): a signature layer still descends.
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::FileVault,
+            verdict: FakeVerdict::Signature(b"CS!!"),
+            inner: Some((16, 8192)),
+            attempts: Arc::new(Mutex::new(0)),
+        });
+    let mut data = b"CS!!".to_vec();
+    data.resize(16, 0);
+    data.extend_from_slice(b"FSFS");
+    data.resize(16 + 8192, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let out = reg
+        .open(mem(data), base, 0)
+        .unwrap()
+        .expect("descends encryption via the retained open()");
+    assert!(
+        out.spec.layers().iter().any(|l| matches!(
+            l,
+            Layer::Encryption {
+                scheme: EncryptionScheme::FileVault
+            }
+        )),
+        "{}",
+        out.spec.to_uri()
+    );
 }
 
 #[test]

@@ -60,3 +60,21 @@ pub trait EncryptionLayer: Send + Sync {
         Ok(Vec::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Credential, CredentialSource, EncryptionScheme, NoCredentials};
+
+    #[test]
+    fn no_credentials_offers_nothing() {
+        // The secure-by-default context: no keys for any scheme/target, so a
+        // signature scheme surfaces NeedCredentials loud and a credential-attempt
+        // scheme simply fails to decrypt (see ADR 0010).
+        let creds = NoCredentials;
+        let none: Vec<Credential> = creds.credentials_for(EncryptionScheme::Bitlocker, "vol-guid");
+        assert!(none.is_empty());
+        assert!(creds
+            .credentials_for(EncryptionScheme::VeraCrypt, "")
+            .is_empty());
+    }
+}
