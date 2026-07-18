@@ -14,12 +14,13 @@ beneath it. A `FileSystem` asks its byte source to `read_at(offset, buf)`; wheth
 source is a raw `.dd`, a decompressed E01 chunk, a decrypted BitLocker volume, or a
 partition window is invisible to it.
 
-Today the **horizontal layers are strong and the vertical layers are empty**: 5 container
-readers and 11 filesystem/archive readers implement their contracts in production; the
-`VolumeSystem` (partition) and `EncryptionLayer` (encryption) contracts have **zero leaf
-implementations** — the reader crates exist (MBR/GPT/APM, BitLocker/LUKS/FileVault/
-VeraCrypt) but none are wired to the contract yet. Closing those two layers is the
-primary remaining work (§7).
+Today the **horizontal layers are strong and only encryption remains unwired**: 5 container
+readers and 13 filesystem/archive readers implement their contracts in production, and the
+`VolumeSystem` (partition) contract is now wired for all three schemes (MBR/GPT/APM via
+`src/vfs.rs`). Only the `EncryptionLayer` (encryption) contract still has **zero leaf
+implementations** — the reader crates exist (BitLocker/LUKS/FileVault/VeraCrypt) but none
+are wired to the contract yet. Closing that last vertical layer is the primary remaining
+work (§7).
 
 The contracts are deliberately minimal and hard to misuse: read-only, cursorless,
 `Send + Sync`, opaque node identity, and gated behind an optional `vfs` cargo feature so
@@ -135,34 +136,44 @@ contract.
 
 Grounded in a fleet-wide grep for `impl (ImageSource|FileSystem|VolumeSystem|EncryptionLayer) for`.
 
-**`ImageSource` — 5 production impls:** ewf (E01), qcow2, vmdk, vhdx, dmg.
-- Crate exists, **no impl yet:** vhd-forensic, livedisk-forensic, disk-forensic.
-- **aff4-forensic is test-only** — forensic-vfs is a dev-dependency; the shipped crate
-  carries no production impl.
+**`ImageSource` — 5 production impls (`src/vfs.rs`):** ewf (E01), qcow2, vhdx, vhd, aff4.
+- **vmdk + dmg** have readers but reach the contract via `disk-forensic`'s
+  `container::open`, not a direct impl yet.
 
-**`FileSystem` — 11 production impls:** ntfs, fat, ext4, apfs, hfsplus, xfs, iso9660, udf,
-zip, ad1, dar.
+**`FileSystem` — 13 production impls.** Genuine filesystems (10): ntfs, fat, ext4, apfs,
+hfsplus, xfs, btrfs, ufs, iso9660, udf. Archive containers (3): zip, ad1, dar.
 - **zip / ad1 / dar are archive containers** exposed as `FileSystem` impls today; per
   [ADR 0008](decisions/0008-archives-as-probes.md) they reclassify to `ArchiveOpen` →
   `ArchiveContents` at the 0.4 cut (archive member trees stop masquerading as filesystems).
-- Crate exists, **no impl yet:** btrfs-forensic, zfs-forensic, refs-forensic.
-- **No crate at all:** exFAT, UFS, legacy (non-plus) HFS.
+- **No crate yet:** zfs, refs, exFAT (standalone), legacy (non-plus) HFS.
 
-**`VolumeSystem` — 0 impls.** mbr-partition-forensic, gpt-partition-forensic,
-apm-partition-forensic all exist; none implement the contract.
+**`VolumeSystem` — 3 production impls (`src/vfs.rs`): mbr, gpt, apm — WIRED.**
+mbr-partition-forensic, gpt-partition-forensic, apm-partition-forensic all implement the
+contract.
 
 **`EncryptionLayer` — 0 impls.** bitlocker-forensic, luks-forensic, filevault-forensic,
 veracrypt-forensic all exist; none implement the contract.
+
+**Umbrella at a glance** (the README's "The reader fleet" section carries the full clickable
+roster grouped by layer):
+
+| Layer | Trait | Readers | Wired |
+|---|---|---|---|
+| Archive | `ArchiveOpen` | archive-forensic, ad1, dar, zip (4) | via archive-core; ad1/dar/zip → ArchiveOpen at 0.4 |
+| Container | `ContainerOpen` | ewf, qcow2, vhdx, vhd, aff4, vmdk, dmg (7) | 5 direct; vmdk + dmg via disk-forensic |
+| Volume | `VolumeSystemOpen` | mbr, gpt, apm (3) | all 3 wired |
+| Encryption | `EncryptionOpen` | bitlocker, luks, filevault, veracrypt (4) | none wired yet |
+| Filesystem | `FileSystemOpen` | ntfs, fat, ext4, xfs, btrfs, apfs, hfsplus, ufs, iso9660, udf (10) | all 10 wired |
 
 ## 7. Remaining work (the "finish the vision" gap)
 
 Ranked by leverage — the two empty vertical layers unlock whole classes of evidence:
 
-1. **`VolumeSystem` for MBR/GPT/APM** — currently no partitioned image can be walked
-   through the contract; `SubRange` exists to window volumes but nothing produces the
-   windows. Highest leverage: every real disk image is partitioned.
-2. **`EncryptionLayer` for BitLocker/LUKS/FileVault/VeraCrypt** — with §7.1 done, encrypted
-   volumes compose in. Depends on `CredentialSource` wiring.
+1. **`VolumeSystem` for MBR/GPT/APM — DONE.** All three schemes are now wired via
+   `src/vfs.rs`, so a partitioned image is walked through the contract and `SubRange`
+   windows each volume. This unblocked the encryption layer below, now the top gap.
+2. **`EncryptionLayer` for BitLocker/LUKS/FileVault/VeraCrypt — the top remaining gap.**
+   With §7.1 done, encrypted volumes compose in. Depends on `CredentialSource` wiring.
 3. **`ImageSource` for vhd, and promote aff4 from test-only to production.**
 4. **`FileSystem` for btrfs/zfs/refs** (crates exist) and **exFAT/UFS** (new crates).
 5. **Crate topology is settled** ([0007](decisions/0007-retire-standalone-engine.md)):

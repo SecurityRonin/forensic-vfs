@@ -66,11 +66,11 @@ Each peels exactly one layer and hands back a source (or member set) the resolve
 
 | Trait | `open()` yields | Formats |
 |---|---|---|
-| `ContainerOpen` | `DynSource` | E01/EWF, VMDK, VHDX, QCOW2, DMG, AFF4 |
-| `ArchiveOpen` | `ArchiveContents` | gz, bz2, tar, zip, 7z |
-| `VolumeSystemOpen` | `Box<dyn VolumeSystem>` | MBR, GPT, APM, VSS |
-| `EncryptionOpen` | `Box<dyn EncryptionLayer>` | BitLocker, LUKS, FileVault |
-| `FileSystemOpen` | `DynFs` | NTFS, ext4, APFS, HFS+, FAT, ISO |
+| `ContainerOpen` | `DynSource` | E01/EWF, VMDK, VHD, VHDX, QCOW2, DMG, AFF4, raw |
+| `ArchiveOpen` | `ArchiveContents` | gz, bz2, tar, zip, clbx, 7z, AD1, DAR |
+| `VolumeSystemOpen` | `Box<dyn VolumeSystem>` | MBR, GPT, APM |
+| `EncryptionOpen` | `Box<dyn EncryptionLayer>` | BitLocker, LUKS, FileVault, VeraCrypt |
+| `FileSystemOpen` | `DynFs` | NTFS, FAT, ext4, XFS, btrfs, APFS, HFS+, UFS, ISO9660, UDF |
 
 Archives are a first-class layer with their own trait ([ADR 0008](docs/decisions/0008-archives-as-probes.md)); `ArchiveOpen::open` returns either a decoded single stream or a member list:
 
@@ -80,6 +80,82 @@ enum ArchiveContents {
     Members(Vec<Member>),  // 1→N: tar/zip/7z — each member re-enters resolution
 }
 ```
+
+## The reader fleet
+
+Every reader below speaks the `forensic-vfs` contract; the resolver composes them into one `Arc<dyn ImageSource>`. Status legend: **✓ wired** — implements the contract in `src/vfs.rs` today · **via disk-forensic** — reaches the contract through `disk_forensic::container::open`, not a direct impl · **not wired yet** — crate exists, no contract impl · **→ ArchiveOpen at 0.4** — implements `FileSystem` today, reclassifies to `ArchiveOpen` at the 0.4 cut. Crates without a link are in-workspace or not yet on GitHub (marked *local*).
+
+**Knowledge / contract** — the leaf types every reader depends on.
+
+| Crate | Role |
+|---|---|
+| [forensicnomicon](https://github.com/SecurityRonin/forensicnomicon) | format magics + the `report` finding model |
+| [safe-read](https://github.com/SecurityRonin/safe-read) | bounded, panic-free positioned reads |
+| [state-history-forensic](https://github.com/SecurityRonin/state-history-forensic) | temporal identity `[H]` |
+| **forensic-vfs** | this crate — `ImageSource` + the five `*Open` contracts |
+| forensic-vfs-resolver *(local)* | the `SourceOpen` orchestrator (recursive descent) |
+| [forensic-vfs-engine](https://github.com/SecurityRonin/forensic-vfs-engine) | `default_openers()` wiring the concrete readers |
+
+**1 · Archive** (`ArchiveOpen`)
+
+| Reader | Formats | Status |
+|---|---|---|
+| archive-forensic *(local)* | gz, bz2, tar, zip, clbx, 7z | wired via archive-core |
+| [ad1-forensic](https://github.com/SecurityRonin/ad1-forensic) | AD1 | → ArchiveOpen at 0.4 |
+| [dar-forensic](https://github.com/SecurityRonin/dar-forensic) | DAR | → ArchiveOpen at 0.4 |
+| [zip-forensic](https://github.com/SecurityRonin/zip-forensic) | ZIP | → ArchiveOpen at 0.4 |
+
+**2 · Container** (`ContainerOpen` → `ImageSource`)
+
+| Reader | Format | Status |
+|---|---|---|
+| [ewf-forensic](https://github.com/SecurityRonin/ewf-forensic) | E01 / EWF | ✓ wired |
+| [qcow2-forensic](https://github.com/SecurityRonin/qcow2-forensic) | QCOW2 | ✓ wired |
+| [vhdx-forensic](https://github.com/SecurityRonin/vhdx-forensic) | VHDX | ✓ wired |
+| [vhd-forensic](https://github.com/SecurityRonin/vhd-forensic) | VHD | ✓ wired |
+| [aff4-forensic](https://github.com/SecurityRonin/aff4-forensic) | AFF4 | ✓ wired |
+| [vmdk-forensic](https://github.com/SecurityRonin/vmdk-forensic) | VMDK | via disk-forensic |
+| [dmg-forensic](https://github.com/SecurityRonin/dmg-forensic) | DMG | via disk-forensic |
+
+**3 · Volume / partition** (`VolumeSystemOpen`)
+
+| Reader | Scheme | Status |
+|---|---|---|
+| [mbr-partition-forensic](https://github.com/SecurityRonin/mbr-partition-forensic) | MBR | ✓ wired |
+| [gpt-partition-forensic](https://github.com/SecurityRonin/gpt-partition-forensic) | GPT | ✓ wired |
+| [apm-partition-forensic](https://github.com/SecurityRonin/apm-partition-forensic) | APM | ✓ wired |
+
+**4 · Encryption** (`EncryptionOpen`)
+
+| Reader | Scheme | Status |
+|---|---|---|
+| [bitlocker-forensic](https://github.com/SecurityRonin/bitlocker-forensic) | BitLocker | not wired yet |
+| [luks-forensic](https://github.com/SecurityRonin/luks-forensic) | LUKS | not wired yet |
+| [filevault-forensic](https://github.com/SecurityRonin/filevault-forensic) | FileVault | not wired yet |
+| [veracrypt-forensic](https://github.com/SecurityRonin/veracrypt-forensic) | VeraCrypt | not wired yet |
+
+**5 · Filesystem** (`FileSystemOpen` → `FileSystem`)
+
+| Reader | Filesystem | Status |
+|---|---|---|
+| [ntfs-forensic](https://github.com/SecurityRonin/ntfs-forensic) | NTFS | ✓ wired |
+| [fat-forensic](https://github.com/SecurityRonin/fat-forensic) | FAT / exFAT | ✓ wired |
+| [ext4fs-forensic](https://github.com/SecurityRonin/ext4fs-forensic) | ext4 | ✓ wired |
+| [xfs-forensic](https://github.com/SecurityRonin/xfs-forensic) | XFS | ✓ wired |
+| [btrfs-forensic](https://github.com/SecurityRonin/btrfs-forensic) | btrfs | ✓ wired |
+| [apfs-forensic](https://github.com/SecurityRonin/apfs-forensic) | APFS | ✓ wired |
+| [hfsplus-forensic](https://github.com/SecurityRonin/hfsplus-forensic) | HFS+ | ✓ wired |
+| [ufs-forensic](https://github.com/SecurityRonin/ufs-forensic) | UFS | ✓ wired |
+| [iso9660-forensic](https://github.com/SecurityRonin/iso9660-forensic) | ISO9660 | ✓ wired |
+| [udf-forensic](https://github.com/SecurityRonin/udf-forensic) | UDF | ✓ wired |
+
+**Consumers** — depend on the abstraction, never on a per-format reader.
+
+| Crate | Role |
+|---|---|
+| [disk-forensic](https://github.com/SecurityRonin/disk-forensic) | open-any-image + partition / ISO analysis |
+| [4n6mount](https://github.com/SecurityRonin/4n6mount) | FUSE mount of any composed stack |
+| [issen](https://github.com/SecurityRonin/issen) | fleet orchestrator |
 
 ## One `SourceOpen` peels the whole stack
 
