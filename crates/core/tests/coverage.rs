@@ -1,5 +1,5 @@
 //! Completion tests exercising the behavioral surface the contract/behavioral
-//! tests don't reach: every token variant round-trips, the Registry builder, the
+//! tests don't reach: every token variant round-trips, the Openers builder, the
 //! SourceId accessors, the stream constructors, and (under the findings feature)
 //! the default findings() surface.
 
@@ -13,11 +13,12 @@ use forensic_vfs::encryption::EncryptionScheme;
 use forensic_vfs::error::VfsResult;
 use forensic_vfs::fs::{ByteRun, ExtentStream, FsKind, NodeStream, RunAlloc, RunFlags, RunInfo};
 use forensic_vfs::registry::{
-    ContainerDecoder, ContainerFormat, EncryptionProbe, FileSystemProbe, Registry, SniffWindow,
-    VolumeSystemProbe,
+    ArchiveOpen, ContainerFormat, ContainerOpen, EncryptionOpen, FileSystemOpen, Openers,
+    SniffWindow, VolumeSystemOpen,
 };
 use forensic_vfs::source::{DynSource, ImageSource, SourceId};
 use forensic_vfs::volume::VolumeScheme;
+use forensic_vfs::{ArchiveContents, Member};
 use forensic_vfs::{Layer, NodeAddr, PathSpec};
 
 struct MemSource(Vec<u8>);
@@ -123,10 +124,10 @@ fn every_fs_kind_token_round_trips() {
     }
 }
 
-// --- Registry builder: minimal probe doubles ---
+// --- Openers builder: minimal probe doubles ---
 
 struct Dc;
-impl ContainerDecoder for Dc {
+impl ContainerOpen for Dc {
     fn format(&self) -> ContainerFormat {
         ContainerFormat::Raw
     }
@@ -138,7 +139,7 @@ impl ContainerDecoder for Dc {
     }
 }
 struct Vp;
-impl VolumeSystemProbe for Vp {
+impl VolumeSystemOpen for Vp {
     fn scheme(&self) -> VolumeScheme {
         VolumeScheme::Mbr
     }
@@ -153,7 +154,7 @@ impl VolumeSystemProbe for Vp {
     }
 }
 struct Cp;
-impl EncryptionProbe for Cp {
+impl EncryptionOpen for Cp {
     fn scheme(&self) -> EncryptionScheme {
         EncryptionScheme::Luks1
     }
@@ -171,7 +172,7 @@ impl EncryptionProbe for Cp {
     }
 }
 struct Fp;
-impl FileSystemProbe for Fp {
+impl FileSystemOpen for Fp {
     fn kind(&self) -> FsKind {
         FsKind::FAT
     }
@@ -185,19 +186,51 @@ impl FileSystemProbe for Fp {
         })
     }
 }
+struct Ap;
+impl ArchiveOpen for Ap {
+    fn probe(&self, _w: &SniffWindow) -> forensic_vfs::Confidence {
+        forensic_vfs::Confidence::No
+    }
+    fn open(&self, src: DynSource) -> VfsResult<ArchiveContents> {
+        Ok(ArchiveContents::Stream(src))
+    }
+}
 
 #[test]
 fn registry_builder_registers_each_kind() {
-    let reg = Registry::new()
+    let reg = Openers::new()
         .container(Dc)
         .volume_system(Vp)
         .encryption(Cp)
-        .filesystem(Fp);
+        .filesystem(Fp)
+        .archive(Ap);
     assert_eq!(reg.containers().len(), 1);
     assert_eq!(reg.volume_systems().len(), 1);
     assert_eq!(reg.encryption_layers().len(), 1);
     assert_eq!(reg.filesystems().len(), 1);
+    assert_eq!(reg.archives().len(), 1);
     assert_eq!(reg.containers()[0].format(), ContainerFormat::Raw);
+}
+
+#[test]
+fn archive_open_is_object_safe_and_contents_constructs_both_variants() {
+    // `ArchiveOpen` must be usable as a trait object (the `Openers` table holds
+    // `Box<dyn ArchiveOpen>`), and `ArchiveContents` must construct both arms.
+    let ao: Box<dyn ArchiveOpen> = Box::new(Ap);
+    let src: DynSource = Arc::new(MemSource(vec![1, 2, 3, 4]));
+    let ArchiveContents::Stream(s) = ao.open(src).unwrap() else {
+        panic!("Ap yields a Stream");
+    };
+    assert_eq!(s.len(), 4);
+    let members = ArchiveContents::Members(vec![Member {
+        name: b"inner.E01".to_vec(),
+        source: Arc::new(MemSource(vec![0u8; 8])),
+    }]);
+    let ArchiveContents::Members(m) = members else {
+        panic!("constructed Members");
+    };
+    assert_eq!(m[0].name, b"inner.E01");
+    assert_eq!(m[0].source.len(), 8);
 }
 
 #[test]

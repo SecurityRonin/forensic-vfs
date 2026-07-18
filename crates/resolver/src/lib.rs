@@ -4,21 +4,21 @@
 //! and descend container/volume/filesystem layers until a filesystem mounts.
 //!
 //! This is the reader-independent core of detection — it touches only the
-//! [`forensic_vfs::Registry`] prober traits and the layered
+//! [`forensic_vfs::Openers`] prober traits and the layered
 //! [`PathSpec`]/[`Layer`] model, never a concrete reader. It is deliberately
 //! split out of the [`forensic-vfs`](https://docs.rs/forensic-vfs) contract leaf
 //! so the *evolving detection behavior* (this crate) is firewalled from the
 //! *frozen contract* the fleet's reader crates pin.
 //!
 //! The orchestration layer (`forensic-vfs-engine`) wires concrete probers into a
-//! [`Registry`], resolves a base [`DynSource`] from a path (EWF-by-path vs a raw
+//! [`Openers`], resolves a base [`DynSource`] from a path (EWF-by-path vs a raw
 //! file), and offers the by-path `open`/snapshot API; everything below that — the
 //! recursion, the sniff windows, [`walk`], and the snapshot *view* — lives here so
-//! any tool or test can drive it registry-first.
+//! any tool or test can drive it openers-first.
 //!
-//! Because `resolve` cannot be an inherent method on the leaf's [`Registry`] from
-//! another crate (the orphan rule), it is exposed as the [`Resolve`] extension
-//! trait; bring it into scope and call `registry.resolve(source, spec, 0)`.
+//! Because `open` cannot be an inherent method on the leaf's [`Openers`] from
+//! another crate (the orphan rule), it is exposed as the [`SourceOpen`] extension
+//! trait; bring it into scope and call `openers.open(source, spec, 0)`.
 
 // Tests may unwrap/expect freely; production code may not.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use state_history_forensic::epoch::EpochTag;
 
 use forensic_vfs::{
-    DynSource, FileId, FileSystem, FsMeta, Layer, NodeAddr, NodeKind, PathSpec, Registry,
+    DynSource, FileId, FileSystem, FsMeta, Layer, NodeAddr, NodeKind, Openers, PathSpec,
     SnapshotRef, SniffWindow, VfsResult,
 };
 
@@ -72,9 +72,9 @@ pub struct Resolved {
 }
 
 /// The generic layer resolver, exposed as an extension trait on the leaf's
-/// [`Registry`]. Bring it into scope (`use forensic_vfs_resolver::Resolve;`) to
-/// call `registry.resolve(source, spec, 0)`.
-pub trait Resolve {
+/// [`Openers`]. Bring it into scope (`use forensic_vfs_resolver::SourceOpen;`) to
+/// call `openers.open(source, spec, 0)`.
+pub trait SourceOpen {
     /// Recursively resolve a source to a filesystem: sniff its head (and a tail
     /// window for trailer magics); if a filesystem prober recognizes it, mount it;
     /// otherwise if a volume-system prober recognizes it, descend into each volume
@@ -89,21 +89,11 @@ pub trait Resolve {
     /// # Errors
     /// Propagates a source read error, or a prober `open`/decode failure raised
     /// after a positive probe verdict.
-    fn resolve(
-        &self,
-        source: DynSource,
-        spec: PathSpec,
-        depth: usize,
-    ) -> VfsResult<Option<Resolved>>;
+    fn open(&self, source: DynSource, spec: PathSpec, depth: usize) -> VfsResult<Option<Resolved>>;
 }
 
-impl Resolve for Registry {
-    fn resolve(
-        &self,
-        source: DynSource,
-        spec: PathSpec,
-        depth: usize,
-    ) -> VfsResult<Option<Resolved>> {
+impl SourceOpen for Openers {
+    fn open(&self, source: DynSource, spec: PathSpec, depth: usize) -> VfsResult<Option<Resolved>> {
         if depth > MAX_DEPTH {
             return Ok(None);
         }
@@ -149,7 +139,7 @@ impl Resolve for Registry {
                         index,
                         guid: None,
                     });
-                    if let Some(found) = self.resolve(sub, child, depth + 1)? {
+                    if let Some(found) = self.open(sub, child, depth + 1)? {
                         return Ok(Some(found));
                     }
                 }
@@ -161,7 +151,7 @@ impl Resolve for Registry {
                 let child = spec.clone().push(Layer::Container {
                     format: cd.format(),
                 });
-                if let Some(found) = self.resolve(decoded, child, depth + 1)? {
+                if let Some(found) = self.open(decoded, child, depth + 1)? {
                     return Ok(Some(found));
                 }
             }

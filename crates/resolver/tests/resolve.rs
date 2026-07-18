@@ -1,4 +1,4 @@
-//! Generic resolver tests: drive the [`Resolve`] extension trait, `walk`, and the
+//! Generic resolver tests: drive the [`SourceOpen`] extension trait, `walk`, and the
 //! snapshot view helpers with **fake probers over synthetic sources** — no
 //! concrete reader. These exercise every branch of the generic resolver (the
 //! reader-wired `Vfs`/`default_registry` path stays in the orchestration layer).
@@ -9,13 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use forensic_vfs::adapters::SubRange;
 use forensic_vfs::{
-    Allocation, Confidence, ContainerDecoder, ContainerFormat, DirEntry, DirStream, DynFs,
-    DynSource, FileId, FileSystem, FileSystemProbe, FsKind, FsMeta, ImageSource, Layer, MacbTimes,
-    NodeAddr, NodeKind, PathSpec, Registry, ResidencyKind, SectorSizes, SnapshotRef, SniffWindow,
+    Allocation, Confidence, ContainerFormat, ContainerOpen, DirEntry, DirStream, DynFs, DynSource,
+    FileId, FileSystem, FileSystemOpen, FsKind, FsMeta, ImageSource, Layer, MacbTimes, NodeAddr,
+    NodeKind, Openers, PathSpec, ResidencyKind, SectorSizes, SnapshotRef, SniffWindow,
     TimeZonePolicy, VfsError, VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem,
-    VolumeSystemProbe,
+    VolumeSystemOpen,
 };
-use forensic_vfs_resolver::{epoch_from_create_time, snapshot_view, walk, Evidence, Resolve};
+use forensic_vfs_resolver::{epoch_from_create_time, snapshot_view, walk, Evidence, SourceOpen};
 
 // --- doubles -------------------------------------------------------------
 
@@ -158,7 +158,7 @@ struct FakeFsProbe {
     magic: &'static [u8],
     fail: bool,
 }
-impl FileSystemProbe for FakeFsProbe {
+impl FileSystemOpen for FakeFsProbe {
     fn kind(&self) -> FsKind {
         FsKind::NTFS
     }
@@ -221,7 +221,7 @@ struct FakeVsProbe {
     magic: &'static [u8],
     windows: Vec<(u64, u64)>,
 }
-impl VolumeSystemProbe for FakeVsProbe {
+impl VolumeSystemOpen for FakeVsProbe {
     fn scheme(&self) -> VolumeScheme {
         VolumeScheme::Gpt
     }
@@ -257,7 +257,7 @@ struct FakeContainer {
     inner: (u64, u64),
     tail: bool,
 }
-impl ContainerDecoder for FakeContainer {
+impl ContainerOpen for FakeContainer {
     fn format(&self) -> ContainerFormat {
         ContainerFormat::Raw
     }
@@ -284,7 +284,7 @@ impl ContainerDecoder for FakeContainer {
 
 #[test]
 fn resolves_a_filesystem_at_the_top_layer() {
-    let reg = Registry::new().filesystem(FakeFsProbe {
+    let reg = Openers::new().filesystem(FakeFsProbe {
         magic: b"FSFS",
         fail: false,
     });
@@ -294,7 +294,7 @@ fn resolves_a_filesystem_at_the_top_layer() {
         start: 0,
         len: data.len() as u64,
     });
-    let out = reg.resolve(mem(data), base, 0).unwrap().expect("mounts fs");
+    let out = reg.open(mem(data), base, 0).unwrap().expect("mounts fs");
     // The locator gains an fs: layer at the empty path.
     assert!(matches!(
         out.spec.layer,
@@ -308,7 +308,7 @@ fn resolves_a_filesystem_at_the_top_layer() {
 
 #[test]
 fn a_matching_probe_whose_open_fails_propagates_loud() {
-    let reg = Registry::new().filesystem(FakeFsProbe {
+    let reg = Openers::new().filesystem(FakeFsProbe {
         magic: b"FSFS",
         fail: true,
     });
@@ -318,13 +318,13 @@ fn a_matching_probe_whose_open_fails_propagates_loud() {
         start: 0,
         len: data.len() as u64,
     });
-    assert!(reg.resolve(mem(data), base, 0).is_err());
+    assert!(reg.open(mem(data), base, 0).is_err());
 }
 
 #[test]
 fn descends_a_volume_system_into_its_filesystem() {
     // A volume system whose single partition (at offset 512) holds the fs magic.
-    let reg = Registry::new()
+    let reg = Openers::new()
         .filesystem(FakeFsProbe {
             magic: b"FSFS",
             fail: false,
@@ -342,7 +342,7 @@ fn descends_a_volume_system_into_its_filesystem() {
         len: data.len() as u64,
     });
     let out = reg
-        .resolve(mem(data), base, 0)
+        .open(mem(data), base, 0)
         .unwrap()
         .expect("mounts fs inside a volume");
     let uri = out.spec.to_uri();
@@ -352,7 +352,7 @@ fn descends_a_volume_system_into_its_filesystem() {
 #[test]
 fn descends_a_container_into_its_filesystem() {
     // A container whose payload begins at offset 1024 and carries the fs magic.
-    let reg = Registry::new()
+    let reg = Openers::new()
         .filesystem(FakeFsProbe {
             magic: b"FSFS",
             fail: false,
@@ -371,7 +371,7 @@ fn descends_a_container_into_its_filesystem() {
         len: data.len() as u64,
     });
     let out = reg
-        .resolve(mem(data), base, 0)
+        .open(mem(data), base, 0)
         .unwrap()
         .expect("mounts fs inside a container");
     assert!(out.spec.to_uri().contains("fs:"));
@@ -382,8 +382,8 @@ fn a_tail_probed_container_matches_a_trailer_magic() {
     // The container magic sits only in the tail (last bytes of the source), and
     // the fs magic sits at an inner offset the container decodes to. The head has
     // neither, so resolution must read the tail window and match has_magic_from_end
-    // inside Registry::resolve — the DMG-koly-footer path.
-    let reg = Registry::new()
+    // inside Openers::open — the DMG-koly-footer path.
+    let reg = Openers::new()
         .filesystem(FakeFsProbe {
             magic: b"FSFS",
             fail: false,
@@ -402,7 +402,7 @@ fn a_tail_probed_container_matches_a_trailer_magic() {
         len: data.len() as u64,
     });
     let out = reg
-        .resolve(mem(data), base, 0)
+        .open(mem(data), base, 0)
         .unwrap()
         .expect("tail-probed container decodes to a mountable fs");
     assert!(out.spec.to_uri().contains("fs:"));
@@ -410,7 +410,7 @@ fn a_tail_probed_container_matches_a_trailer_magic() {
 
 #[test]
 fn unrecognized_source_resolves_to_none() {
-    let reg = Registry::new().filesystem(FakeFsProbe {
+    let reg = Openers::new().filesystem(FakeFsProbe {
         magic: b"FSFS",
         fail: false,
     });
@@ -418,15 +418,12 @@ fn unrecognized_source_resolves_to_none() {
         start: 0,
         len: 4096,
     });
-    assert!(reg
-        .resolve(mem(vec![0u8; 4096]), base, 0)
-        .unwrap()
-        .is_none());
+    assert!(reg.open(mem(vec![0u8; 4096]), base, 0).unwrap().is_none());
 }
 
 #[test]
 fn a_volume_system_whose_volumes_hold_no_fs_falls_through_to_none() {
-    let reg = Registry::new()
+    let reg = Openers::new()
         .filesystem(FakeFsProbe {
             magic: b"FSFS",
             fail: false,
@@ -441,12 +438,12 @@ fn a_volume_system_whose_volumes_hold_no_fs_falls_through_to_none() {
         start: 0,
         len: data.len() as u64,
     });
-    assert!(reg.resolve(mem(data), base, 0).unwrap().is_none());
+    assert!(reg.open(mem(data), base, 0).unwrap().is_none());
 }
 
 #[test]
 fn a_container_whose_payload_holds_no_fs_falls_through_to_none() {
-    let reg = Registry::new()
+    let reg = Openers::new()
         .filesystem(FakeFsProbe {
             magic: b"FSFS",
             fail: false,
@@ -462,14 +459,14 @@ fn a_container_whose_payload_holds_no_fs_falls_through_to_none() {
         start: 0,
         len: data.len() as u64,
     });
-    assert!(reg.resolve(mem(data), base, 0).unwrap().is_none());
+    assert!(reg.open(mem(data), base, 0).unwrap().is_none());
 }
 
 #[test]
 fn recursion_is_depth_capped_on_a_self_referential_container() {
     // A container that decodes to its own whole self recurses forever; the depth
     // cap breaks it, yielding None rather than a stack overflow.
-    let reg = Registry::new().container(FakeContainer {
+    let reg = Openers::new().container(FakeContainer {
         magic: b"LOOP",
         inner: (0, 4096),
         tail: false,
@@ -480,18 +477,18 @@ fn recursion_is_depth_capped_on_a_self_referential_container() {
         start: 0,
         len: data.len() as u64,
     });
-    assert!(reg.resolve(mem(data), base, 0).unwrap().is_none());
+    assert!(reg.open(mem(data), base, 0).unwrap().is_none());
 }
 
 #[test]
 fn an_empty_source_reads_a_single_byte_window_and_resolves_to_none() {
     // total == 0 exercises the clamp(1, ..) head window and the zero-length tail.
-    let reg = Registry::new().filesystem(FakeFsProbe {
+    let reg = Openers::new().filesystem(FakeFsProbe {
         magic: b"FSFS",
         fail: false,
     });
     let base = PathSpec::root(Layer::Range { start: 0, len: 0 });
-    assert!(reg.resolve(mem(Vec::new()), base, 0).unwrap().is_none());
+    assert!(reg.open(mem(Vec::new()), base, 0).unwrap().is_none());
 }
 
 // --- walk ----------------------------------------------------------------
@@ -828,7 +825,7 @@ fn resolve_keeps_the_base_source_shared_across_layers() {
         }
     }
     let seen = Arc::new(Mutex::new(0usize));
-    let reg = Registry::new().filesystem(FakeFsProbe {
+    let reg = Openers::new().filesystem(FakeFsProbe {
         magic: b"FSFS",
         fail: false,
     });
@@ -842,6 +839,6 @@ fn resolve_keeps_the_base_source_shared_across_layers() {
         start: 0,
         len: data.len() as u64,
     });
-    assert!(reg.resolve(src, base, 0).unwrap().is_some());
+    assert!(reg.open(src, base, 0).unwrap().is_some());
     assert!(*seen.lock().unwrap() >= 1, "the base source was read");
 }

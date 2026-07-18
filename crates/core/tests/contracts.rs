@@ -14,7 +14,7 @@ use forensic_vfs::fs::{
     Allocation, DirEntry, DirStream, DynFs, ExtentStream, FileId, FileSystem, FsKind, FsMeta,
     MacbTimes, NodeKind, NodeStream, ResidencyKind, SectorSizes, StreamId, TimeZonePolicy,
 };
-use forensic_vfs::registry::{Confidence, Registry, SniffWindow};
+use forensic_vfs::registry::{Confidence, Openers, SniffWindow};
 use forensic_vfs::source::{
     read_exact_at, DynSource, Extent, Extents, ImageSource, SourceId, SourceView,
 };
@@ -260,7 +260,7 @@ fn encryption_layer_needs_credentials_then_opens() {
 #[test]
 fn registry_collects_probers() {
     // An empty default registry; a real one is filled by the engine.
-    let reg = Registry::new();
+    let reg = Openers::new();
     assert!(reg.containers().is_empty());
     assert!(reg.volume_systems().is_empty());
     assert!(reg.encryption_layers().is_empty());

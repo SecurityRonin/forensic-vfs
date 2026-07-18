@@ -4,6 +4,36 @@ All notable changes to `forensic-vfs` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0]
+
+### Changed
+
+- **BREAKING: every layer probe trait is renamed to the `*Open` family**, so all
+  layers share one `probe() + open()` shape named for the `open()` step (the
+  `Read`→read idiom): `ContainerDecoder → ContainerOpen`, `VolumeSystemProbe →
+  VolumeSystemOpen`, `EncryptionProbe → EncryptionOpen`, `FileSystemProbe →
+  FileSystemOpen`. Reader crates rename their `impl` targets; method signatures are
+  unchanged (see [ADR 0008](docs/decisions/0008-archives-as-probes.md)).
+- **BREAKING: the dispatch table `Registry` is renamed `Openers`** (builder methods
+  `container`/`volume_system`/`encryption`/`filesystem` unchanged, plus a new
+  `archive()`). The engine's `default_registry()` becomes `default_openers()`.
+- **BREAKING (`forensic-vfs-resolver`): the `Resolve` extension trait is renamed
+  `SourceOpen` and its `resolve(...)` method renamed `open(...)`** — one `open`
+  vocabulary from the base source down to each layer. `impl SourceOpen for Openers`;
+  call `openers.open(source, spec, 0)`.
+
+### Added
+
+- **`ArchiveOpen` — a first-class archive/compression layer trait** (the fifth
+  `*Open`), with the same `probe() + open()` shape. Its `open` yields
+  `ArchiveContents::Stream(DynSource)` (a bare gzip/bzip2 peel, 1→1) or
+  `ArchiveContents::Members(Vec<Member>)` (tar/zip/7z, 1→N), each re-entering
+  resolution like a container decode. `Openers` gains an `archive()` builder and an
+  `archives()` accessor. The leaf carries only the trait + `ArchiveContents`/`Member`
+  contract types; every decoder and its compression deps live in the `archive-core`
+  adapter (a follow-on stage), so the leaf stays zero-dependency and `forbid(unsafe)`
+  (see [ADR 0008](docs/decisions/0008-archives-as-probes.md)).
+
 ## [0.3.0]
 
 ### Changed

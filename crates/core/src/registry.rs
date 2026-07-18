@@ -1,11 +1,12 @@
-//! The plugin contracts and the compiled-in dispatch [`Registry`].
+//! The plugin contracts and the compiled-in dispatch [`Openers`].
 //!
-//! A reader implements one of the four probe traits; the engine
-//! (`forensic-vfs-engine`) fills a [`Registry`] with every reader and drives the
+//! A reader implements one of the five `*Open` traits; the engine
+//! (`forensic-vfs-engine`) fills an [`Openers`] with every reader and drives the
 //! resolver. The table is explicit and greppable — not a link-time `inventory`
 //! registration — so the dependency graph stays auditable and detection order is
 //! deterministic.
 
+use crate::archive::ArchiveContents;
 use crate::encryption::EncryptionLayer;
 use crate::error::VfsResult;
 use crate::fs::{DynFs, FsKind};
@@ -144,45 +145,57 @@ impl<'a> SniffWindow<'a> {
 }
 
 /// Decodes an outer container to a raw byte stream.
-pub trait ContainerDecoder: Send + Sync {
+pub trait ContainerOpen: Send + Sync {
     fn format(&self) -> ContainerFormat;
     fn probe(&self, w: &SniffWindow) -> Confidence;
     fn open(&self, src: DynSource) -> VfsResult<DynSource>;
 }
 
 /// Recognizes and opens a partitioning/volume scheme.
-pub trait VolumeSystemProbe: Send + Sync {
+pub trait VolumeSystemOpen: Send + Sync {
     fn scheme(&self) -> VolumeScheme;
     fn probe(&self, w: &SniffWindow) -> Confidence;
     fn open(&self, src: DynSource) -> VfsResult<Box<dyn VolumeSystem>>;
 }
 
 /// Recognizes and opens a full-disk-encryption layer.
-pub trait EncryptionProbe: Send + Sync {
+pub trait EncryptionOpen: Send + Sync {
     fn scheme(&self) -> crate::encryption::EncryptionScheme;
     fn probe(&self, w: &SniffWindow) -> Confidence;
     fn open(&self, src: DynSource) -> VfsResult<Box<dyn EncryptionLayer>>;
 }
 
 /// Recognizes and mounts a filesystem.
-pub trait FileSystemProbe: Send + Sync {
+pub trait FileSystemOpen: Send + Sync {
     fn kind(&self) -> FsKind;
     fn probe(&self, w: &SniffWindow) -> Confidence;
     fn open(&self, src: DynSource) -> VfsResult<DynFs>;
 }
 
-/// The compiled-in dispatch table. Populated by the engine's `default_registry()`;
+/// Recognizes and peels an archive/compression wrapper: a bare gzip/bzip2 stream
+/// decodes to a single inner [`DynSource`] ([`ArchiveContents::Stream`], 1→1),
+/// while a multi-member archive (tar/zip/7z) yields its member table
+/// ([`ArchiveContents::Members`], 1→N). Each result re-enters resolution exactly
+/// like a container decode. See ADR 0008 (archives resolve as a first-class layer);
+/// the concrete decoder lives in the `archive-core` adapter, never in this leaf.
+pub trait ArchiveOpen: Send + Sync {
+    fn probe(&self, w: &SniffWindow) -> Confidence;
+    fn open(&self, src: DynSource) -> VfsResult<ArchiveContents>;
+}
+
+/// The compiled-in dispatch table. Populated by the engine's `default_openers()`;
 /// held here so any tool/test can build one without a circular dep through a
 /// binary crate.
 #[derive(Default)]
-pub struct Registry {
-    containers: Vec<Box<dyn ContainerDecoder>>,
-    volume_systems: Vec<Box<dyn VolumeSystemProbe>>,
-    encryption: Vec<Box<dyn EncryptionProbe>>,
-    filesystems: Vec<Box<dyn FileSystemProbe>>,
+pub struct Openers {
+    containers: Vec<Box<dyn ContainerOpen>>,
+    volume_systems: Vec<Box<dyn VolumeSystemOpen>>,
+    encryption: Vec<Box<dyn EncryptionOpen>>,
+    filesystems: Vec<Box<dyn FileSystemOpen>>,
+    archives: Vec<Box<dyn ArchiveOpen>>,
 }
 
-impl Registry {
+impl Openers {
     /// An empty registry.
     #[must_use]
     pub fn new() -> Self {
@@ -191,50 +204,62 @@ impl Registry {
 
     /// Register a container decoder (builder style).
     #[must_use]
-    pub fn container(mut self, d: impl ContainerDecoder + 'static) -> Self {
+    pub fn container(mut self, d: impl ContainerOpen + 'static) -> Self {
         self.containers.push(Box::new(d));
         self
     }
 
     /// Register a volume-system prober.
     #[must_use]
-    pub fn volume_system(mut self, p: impl VolumeSystemProbe + 'static) -> Self {
+    pub fn volume_system(mut self, p: impl VolumeSystemOpen + 'static) -> Self {
         self.volume_systems.push(Box::new(p));
         self
     }
 
     /// Register a encryption prober.
     #[must_use]
-    pub fn encryption(mut self, p: impl EncryptionProbe + 'static) -> Self {
+    pub fn encryption(mut self, p: impl EncryptionOpen + 'static) -> Self {
         self.encryption.push(Box::new(p));
         self
     }
 
     /// Register a filesystem prober.
     #[must_use]
-    pub fn filesystem(mut self, p: impl FileSystemProbe + 'static) -> Self {
+    pub fn filesystem(mut self, p: impl FileSystemOpen + 'static) -> Self {
         self.filesystems.push(Box::new(p));
+        self
+    }
+
+    /// Register an archive prober (gzip/bzip2/tar/zip/7z peel).
+    #[must_use]
+    pub fn archive(mut self, a: impl ArchiveOpen + 'static) -> Self {
+        self.archives.push(Box::new(a));
         self
     }
 
     /// The registered container decoders, in registration order.
     #[must_use]
-    pub fn containers(&self) -> &[Box<dyn ContainerDecoder>] {
+    pub fn containers(&self) -> &[Box<dyn ContainerOpen>] {
         &self.containers
     }
     /// The registered volume-system probers.
     #[must_use]
-    pub fn volume_systems(&self) -> &[Box<dyn VolumeSystemProbe>] {
+    pub fn volume_systems(&self) -> &[Box<dyn VolumeSystemOpen>] {
         &self.volume_systems
     }
     /// The registered encryption probers.
     #[must_use]
-    pub fn encryption_layers(&self) -> &[Box<dyn EncryptionProbe>] {
+    pub fn encryption_layers(&self) -> &[Box<dyn EncryptionOpen>] {
         &self.encryption
     }
     /// The registered filesystem probers.
     #[must_use]
-    pub fn filesystems(&self) -> &[Box<dyn FileSystemProbe>] {
+    pub fn filesystems(&self) -> &[Box<dyn FileSystemOpen>] {
         &self.filesystems
+    }
+    /// The registered archive probers.
+    #[must_use]
+    pub fn archives(&self) -> &[Box<dyn ArchiveOpen>] {
+        &self.archives
     }
 }
