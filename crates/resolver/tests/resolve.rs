@@ -868,6 +868,92 @@ fn a_credential_attempt_whose_decrypt_fails_falls_through_to_none() {
 }
 
 #[test]
+fn a_signature_scheme_that_does_not_match_yields_a_no_verdict() {
+    // A registered signature scheme whose magic is absent returns Confidence::No and
+    // is simply skipped — the source resolves to None with no encryption layer.
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::Bitlocker,
+            verdict: FakeVerdict::Signature(b"BDE!"),
+            inner: Some((0, 4096)),
+            attempts: Arc::new(Mutex::new(0)),
+        });
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: 4096,
+    });
+    // All-zero source: no fs magic, no BDE! magic -> No verdict -> None.
+    assert!(reg
+        .open_with_credentials(mem(vec![0u8; 4096]), base, 0, &NoCredentials)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_signature_scheme_whose_plaintext_holds_no_fs_falls_through_to_none() {
+    // A Yes signature decrypts successfully, but the plaintext carries no fs magic:
+    // the nested resolve returns None and the descent falls through to None (the
+    // decrypt itself did not fail, so this is not the loud-propagation path).
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::Bitlocker,
+            verdict: FakeVerdict::Signature(b"BDE!"),
+            inner: Some((512, 4096)), // decrypted window is all zeros -> no fs
+            attempts: Arc::new(Mutex::new(0)),
+        });
+    let mut data = b"BDE!".to_vec();
+    data.resize(512 + 4096, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    assert!(reg
+        .open_with_credentials(mem(data), base, 0, &NoCredentials)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_credential_attempt_whose_plaintext_holds_no_fs_falls_through_to_none() {
+    // The last-resort decrypt succeeds but the plaintext carries no fs magic: the
+    // nested resolve returns None and the loop falls through to None.
+    let attempts = Arc::new(Mutex::new(0usize));
+    let reg = Openers::new()
+        .filesystem(FakeFsProbe {
+            magic: b"FSFS",
+            fail: false,
+        })
+        .encryption(FakeEncProbe {
+            scheme: EncryptionScheme::VeraCrypt,
+            verdict: FakeVerdict::CredentialAttempt,
+            inner: Some((0, 4096)), // decrypted window is all zeros -> no fs
+            attempts: attempts.clone(),
+        });
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: 4096,
+    });
+    assert!(reg
+        .open_with_credentials(mem(vec![0u8; 4096]), base, 0, &NoCredentials)
+        .unwrap()
+        .is_none());
+    // A self-referential credential-attempt decrypt is bounded by the same depth
+    // cap that guards a container loop.
+    assert!(
+        *attempts.lock().unwrap() >= 1,
+        "the last-resort decrypt was driven"
+    );
+}
+
+#[test]
 fn plain_open_delegates_through_no_credentials_and_still_descends_encryption() {
     // The retained no-credential `open` entry point delegates to
     // open_with_credentials(&NoCredentials): a signature layer still descends.

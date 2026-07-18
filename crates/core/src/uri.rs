@@ -633,6 +633,29 @@ mod tests {
     }
 
     #[test]
+    fn every_encryption_scheme_token_round_trips() {
+        // Each FDE scheme's `encryption:<scheme>` token must survive to_uri ->
+        // from_uri byte-for-byte, mirroring the container/volume token tests.
+        for scheme in [
+            EncryptionScheme::Bitlocker,
+            EncryptionScheme::Luks1,
+            EncryptionScheme::Luks2,
+            EncryptionScheme::FileVault,
+            EncryptionScheme::ApfsEncrypted,
+            EncryptionScheme::VeraCrypt,
+        ] {
+            roundtrip(&PathSpec::os("/x").push(Layer::Encryption { scheme }));
+        }
+    }
+
+    #[test]
+    fn from_uri_rejects_unknown_encryption_scheme() {
+        // An encryption token outside the known set is a hard reject (loud), never
+        // a fallback or a panic.
+        assert!(PathSpec::from_uri("fvfs:encryption:rot13").is_err());
+    }
+
+    #[test]
     fn empty_path_round_trips() {
         roundtrip(&PathSpec::os("/x").push(Layer::Fs {
             kind: FsKind::ISO9660,

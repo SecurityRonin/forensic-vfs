@@ -45,6 +45,22 @@ pub trait CredentialSource: Send + Sync {
     fn credentials_for(&self, scheme: EncryptionScheme, target: &str) -> Vec<Credential>;
 }
 
+/// A [`CredentialSource`] that offers nothing — the secure-by-default credential
+/// context for a resolve that supplies no keys. It is the default threaded through
+/// the resolver's no-credential entry point, so an encrypted volume is never
+/// silently skipped nor guessed: a signature-detected scheme (BitLocker/LUKS/
+/// FileVault) surfaces [`crate::error::VfsError::NeedCredentials`] loudly, and a
+/// credential-attempt scheme (VeraCrypt) simply fails to decrypt and falls through
+/// (see ADR 0010).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoCredentials;
+
+impl CredentialSource for NoCredentials {
+    fn credentials_for(&self, _scheme: EncryptionScheme, _target: &str) -> Vec<Credential> {
+        Vec::new()
+    }
+}
+
 /// An encryption translation over one [`crate::ImageSource`]: consumes credentials +
 /// ciphertext sectors, presents a decrypted [`DynSource`].
 pub trait EncryptionLayer: Send + Sync {

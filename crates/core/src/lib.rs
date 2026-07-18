@@ -51,7 +51,9 @@ pub mod uri;
 pub mod volume;
 
 pub use archive::{ArchiveContents, Member};
-pub use encryption::{Credential, CredentialSource, EncryptionLayer, EncryptionScheme};
+pub use encryption::{
+    Credential, CredentialSource, EncryptionLayer, EncryptionScheme, NoCredentials,
+};
 pub use error::{SmallHex, VfsError, VfsResult};
 pub use fs::{
     Allocation, ByteRun, DirEntry, DirStream, DynFs, ExtentStream, FileId, FileSystem, FsKind,

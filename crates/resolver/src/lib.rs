@@ -28,8 +28,8 @@ use std::collections::HashSet;
 use state_history_forensic::epoch::EpochTag;
 
 use forensic_vfs::{
-    ArchiveContents, DynSource, FileId, FileSystem, FsMeta, Layer, NodeAddr, NodeKind, Openers,
-    PathSpec, SnapshotRef, SniffWindow, VfsResult,
+    ArchiveContents, Confidence, CredentialSource, DynSource, FileId, FileSystem, FsMeta, Layer,
+    NoCredentials, NodeAddr, NodeKind, Openers, PathSpec, SnapshotRef, SniffWindow, VfsResult,
 };
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
@@ -75,38 +75,63 @@ pub struct Resolved {
 /// [`Openers`]. Bring it into scope (`use forensic_vfs_resolver::SourceOpen;`) to
 /// call `openers.open(source, spec, 0)`.
 pub trait SourceOpen {
+    /// Recursively resolve a source to a filesystem, supplying no credentials.
+    /// A convenience wrapper over [`SourceOpen::open_with_credentials`] with the
+    /// leaf's [`NoCredentials`] context: a signature-detected encryption layer then
+    /// surfaces `NeedCredentials` loudly and a credential-attempt scheme falls
+    /// through, so an encrypted volume is never silently skipped nor guessed.
+    ///
+    /// # Errors
+    /// Propagates a source read error, or a prober `open`/decode failure raised
+    /// after a positive probe verdict.
+    fn open(&self, source: DynSource, spec: PathSpec, depth: usize) -> VfsResult<Option<Resolved>> {
+        self.open_with_credentials(source, spec, depth, &NoCredentials)
+    }
+
     /// Recursively resolve a source to a filesystem: sniff its head (and a tail
     /// window for trailer magics); if a filesystem prober recognizes it, mount it;
     /// otherwise if a volume-system prober recognizes it, descend into each volume
-    /// and resolve that; otherwise if a container decoder recognizes it, decode and
-    /// resolve the decoded stream. `Ok(None)` when nothing recognizes it — a
-    /// genuinely clean unknown, not an error. A prober's `open` failure after a
-    /// positive verdict propagates loud (never a silent `None`).
+    /// and resolve that; otherwise attempt a signature-detected encryption layer,
+    /// then containers, then archives; finally, as a last resort, attempt each
+    /// signature-less credential-attempt encryption scheme so a wrong VeraCrypt
+    /// guess can never shadow a real filesystem (ADR 0010). `Ok(None)` when nothing
+    /// recognizes it — a genuinely clean unknown, not an error.
     ///
+    /// Encryption failure semantics follow the probe verdict (ADR 0010): a `Yes`
+    /// (BitLocker/LUKS/FileVault) whose decrypt fails propagates loud — the source
+    /// *is* identified encryption and a wrong/absent key is a nameable condition —
+    /// while a `Maybe` (VeraCrypt) whose decrypt fails falls through, because a
+    /// failed decrypt of a signature-less scheme is indistinguishable from random
+    /// data and must not break the empty-source contract.
+    ///
+    /// `creds` supplies keys/passphrases to any encryption layer reached.
     /// `depth` is the current nesting level; callers start at `0`. The recursion is
     /// depth-capped against a self-referential container/volume bomb.
     ///
     /// # Errors
     /// Propagates a source read error, or a prober `open`/decode failure raised
-    /// after a positive probe verdict.
-    fn open(&self, source: DynSource, spec: PathSpec, depth: usize) -> VfsResult<Option<Resolved>>;
+    /// after a positive (`Yes`) probe verdict.
+    fn open_with_credentials(
+        &self,
+        source: DynSource,
+        spec: PathSpec,
+        depth: usize,
+        creds: &dyn CredentialSource,
+    ) -> VfsResult<Option<Resolved>>;
 }
 
 impl SourceOpen for Openers {
-    fn open(&self, source: DynSource, spec: PathSpec, depth: usize) -> VfsResult<Option<Resolved>> {
+    fn open_with_credentials(
+        &self,
+        source: DynSource,
+        spec: PathSpec,
+        depth: usize,
+        creds: &dyn CredentialSource,
+    ) -> VfsResult<Option<Resolved>> {
         if depth > MAX_DEPTH {
             return Ok(None);
         }
-        let total = source.len();
-        let cap = total.clamp(1, SNIFF_CAP) as usize;
-        let mut head = vec![0u8; cap];
-        let n = source.read_at(0, &mut head)?;
-        // A tail window (the last bytes of the source) so a prober can match a
-        // trailer signature the head never reaches — e.g. the DMG koly footer.
-        let tail_cap = total.min(TAIL_CAP);
-        let tail_start = total - tail_cap;
-        let mut tail = vec![0u8; tail_cap as usize];
-        let tn = source.read_at(tail_start, &mut tail)?;
+        let (head, n, tail, tn, total) = read_sniff_buffers(&source)?;
         let window = SniffWindow::with_tail(
             0,
             head.get(..n).unwrap_or(&[]),
@@ -139,11 +164,25 @@ impl SourceOpen for Openers {
                         index,
                         guid: None,
                     });
-                    if let Some(found) = self.open(sub, child, depth + 1)? {
+                    if let Some(found) = self.open_with_credentials(sub, child, depth + 1, creds)? {
                         return Ok(Some(found));
                     }
                 }
             }
+        }
+        // Encryption descent (ADR 0010), eager signature pass. `Maybe` schemes are
+        // recorded for the last-resort pass below, so they never shadow a real fs.
+        let mut credential_attempt: Vec<usize> = Vec::new();
+        if let Some(found) = descend_signature_encryption(
+            self,
+            &window,
+            &source,
+            &spec,
+            depth,
+            creds,
+            &mut credential_attempt,
+        )? {
+            return Ok(Some(found));
         }
         for cd in self.containers() {
             if cd.probe(&window).is_candidate() {
@@ -151,7 +190,7 @@ impl SourceOpen for Openers {
                 let child = spec.clone().push(Layer::Container {
                     format: cd.format(),
                 });
-                if let Some(found) = self.open(decoded, child, depth + 1)? {
+                if let Some(found) = self.open_with_credentials(decoded, child, depth + 1, creds)? {
                     return Ok(Some(found));
                 }
             }
@@ -167,7 +206,9 @@ impl SourceOpen for Openers {
                 match ar.open(source.clone())? {
                     ArchiveContents::Stream(inner) => {
                         let child = spec.clone().push(Layer::Archive { member: None });
-                        if let Some(found) = self.open(inner, child, depth + 1)? {
+                        if let Some(found) =
+                            self.open_with_credentials(inner, child, depth + 1, creds)?
+                        {
                             return Ok(Some(found));
                         }
                     }
@@ -176,7 +217,9 @@ impl SourceOpen for Openers {
                             let child = spec.clone().push(Layer::Archive {
                                 member: Some(index),
                             });
-                            if let Some(found) = self.open(member.source, child, depth + 1)? {
+                            if let Some(found) =
+                                self.open_with_credentials(member.source, child, depth + 1, creds)?
+                            {
                                 return Ok(Some(found));
                             }
                         }
@@ -187,8 +230,111 @@ impl SourceOpen for Openers {
                 }
             }
         }
-        Ok(None)
+        // Encryption descent (ADR 0010), credential-attempt last resort — only
+        // reached when nothing above claimed the source.
+        descend_credential_attempt_encryption(
+            self,
+            &source,
+            &spec,
+            depth,
+            creds,
+            &credential_attempt,
+        )
     }
+}
+
+/// The owned head/tail sniff buffers of a source, plus their filled lengths and
+/// the source's total length: `(head, head_len, tail, tail_len, total_len)`. A
+/// [`SniffWindow`] borrows the two buffers.
+type SniffBuffers = (Vec<u8>, usize, Vec<u8>, usize, u64);
+
+/// Read the head (up to [`SNIFF_CAP`]) and tail (up to [`TAIL_CAP`]) sniff buffers
+/// of `source` in two bounded reads. The caller builds a [`SniffWindow`] borrowing
+/// the returned buffers. The tail lets a prober match a trailer signature the head
+/// never reaches — e.g. the DMG `koly` footer.
+fn read_sniff_buffers(source: &DynSource) -> VfsResult<SniffBuffers> {
+    let total = source.len();
+    let cap = total.clamp(1, SNIFF_CAP) as usize;
+    let mut head = vec![0u8; cap];
+    let n = source.read_at(0, &mut head)?;
+    let tail_cap = total.min(TAIL_CAP);
+    let tail_start = total - tail_cap;
+    let mut tail = vec![0u8; tail_cap as usize];
+    let tn = source.read_at(tail_start, &mut tail)?;
+    Ok((head, n, tail, tn, total))
+}
+
+/// Eager signature-encryption pass (ADR 0010): descend any `Yes`-verdict scheme
+/// (BitLocker/LUKS/FileVault) and recurse on its decrypted plaintext, recording
+/// each `Maybe`-verdict (signature-less) scheme's index into `credential_attempt`
+/// for the last-resort pass. A `Yes` decrypt failure propagates loud (the source
+/// *is* identified encryption), never a silent fall-through.
+///
+/// A free function rather than a method: `Openers` lives in the leaf, so the
+/// resolver cannot add inherent methods to it (the orphan rule — the same reason
+/// [`SourceOpen`] is an extension trait).
+fn descend_signature_encryption(
+    openers: &Openers,
+    window: &SniffWindow,
+    source: &DynSource,
+    spec: &PathSpec,
+    depth: usize,
+    creds: &dyn CredentialSource,
+    credential_attempt: &mut Vec<usize>,
+) -> VfsResult<Option<Resolved>> {
+    for (i, enc) in openers.encryption_layers().iter().enumerate() {
+        match enc.probe(window) {
+            Confidence::Yes { .. } => {
+                let layer = enc.open(source.clone())?;
+                let decrypted = layer.open(creds)?;
+                let child = spec.clone().push(Layer::Encryption {
+                    scheme: enc.scheme(),
+                });
+                if let Some(found) =
+                    openers.open_with_credentials(decrypted, child, depth + 1, creds)?
+                {
+                    return Ok(Some(found));
+                }
+            }
+            Confidence::Maybe => credential_attempt.push(i),
+            Confidence::No => {}
+        }
+    }
+    Ok(None)
+}
+
+/// Credential-attempt last-resort pass (ADR 0010): for each recorded `Maybe`
+/// scheme (VeraCrypt), construct the layer and attempt to decrypt with `creds`,
+/// recursing on success. A `Maybe` was never a positive identification, so a failed
+/// *decrypt* means "not this scheme / wrong creds" — indistinguishable from random
+/// data — and falls through to the next candidate, never breaking the empty-source
+/// contract by erroring on an unrecognized blob. Constructing the layer, by
+/// contrast, is loud (`?`): a construction failure is an unexpected internal error,
+/// not a "wrong password", so it is surfaced rather than swallowed.
+fn descend_credential_attempt_encryption(
+    openers: &Openers,
+    source: &DynSource,
+    spec: &PathSpec,
+    depth: usize,
+    creds: &dyn CredentialSource,
+    credential_attempt: &[usize],
+) -> VfsResult<Option<Resolved>> {
+    for &i in credential_attempt {
+        let Some(enc) = openers.encryption_layers().get(i) else {
+            continue; // cov:unreachable: indices came from this same slice
+        };
+        let layer = enc.open(source.clone())?;
+        let Ok(decrypted) = layer.open(creds) else {
+            continue;
+        };
+        let child = spec.clone().push(Layer::Encryption {
+            scheme: enc.scheme(),
+        });
+        if let Some(found) = openers.open_with_credentials(decrypted, child, depth + 1, creds)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
 }
 
 /// One snapshot of a filesystem, viewed as a time-indexed state in the `[H]`
