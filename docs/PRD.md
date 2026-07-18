@@ -162,8 +162,10 @@ Ranked by leverage — the two empty vertical layers unlock whole classes of evi
    volumes compose in. Depends on `CredentialSource` wiring.
 3. **`ImageSource` for vhd, and promote aff4 from test-only to production.**
 4. **`FileSystem` for btrfs/zfs/refs** (crates exist) and **exFAT/UFS** (new crates).
-5. **Retire the standalone `forensic-vfs-engine`** duplicate in favor of
-   `crates/engine` ([0007](decisions/0007-retire-standalone-engine.md)).
+5. **Crate topology is settled** ([0007](decisions/0007-retire-standalone-engine.md)):
+   the contract leaf `forensic-vfs` + `forensic-vfs-resolver` (the `SourceOpen` descent) +
+   a separate published `forensic-vfs-engine` wiring the readers. The in-workspace
+   `crates/engine` duplicate an earlier draft favored is retired.
 6. **Wire `forensic-vfs-mount` into `4n6mount`** — the FileSystem→inode adapter exists
    (tests green); it is not yet the mount path.
 

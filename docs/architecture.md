@@ -67,16 +67,30 @@ bytes containing a delimiter can never collide two specs. Two text forms: a
 a **lossy human `Display`**. Credentials are supplied out-of-band at resolve time,
 never stored in the address.
 
-## Crate structure and phases
+## Crate structure
+
+Three roles across three crates ([ADR 0007](decisions/0007-retire-standalone-engine.md)):
 
 | Crate | Role | Status |
 |---|---|---|
-| **`forensic-vfs`** | byte source, volume/encryption/filesystem traits, `PathSpec`, openers contracts | this crate |
-| `forensic-vfs-engine` | openers + graph resolver + concurrent block cache, depending down on every reader | planned |
+| **`forensic-vfs`** | byte source (`ImageSource`), the five `*Open` traits, `Openers` dispatch table, `PathSpec`, `FsMeta`, `FsKind` | published (0.4) — this crate |
+| **`forensic-vfs-resolver`** | the `SourceOpen` orchestrator — `impl SourceOpen for Openers`, recursive graph descent, `walk`, `snapshot_view` | published (0.1) — this workspace |
+| **`forensic-vfs-engine`** | `default_openers()` wiring the ~17 concrete readers + `Vfs::open(path)` host bootstrap + concurrent block cache | a **separate published repo** |
 | `disk-forensic` / `disk4n6` | thin CLI over the engine | evolving |
 
-Phasing (each step gated on the Case-001 Szechuan ingest, no regression): extract
-the leaf → build the engine over existing readers → collapse the issen disk
-wrappers → move 4n6mount onto the engine → add encryption/snapshots/nesting → in-tree
-reader trait impls. The full plan lives in the
-[design doc](https://github.com/SecurityRonin/disk-forensic/blob/main/docs/design/2026-07-06-universal-forensic-vfs.md).
+The leaf carries the contracts and nothing that names a concrete format; the resolver
+carries the reader-independent descent policy; the engine (its own repo, so 17 reader
+trees never pollute the leaf's CI or audit surface) carries the concrete wiring. The
+division and its rationale — including why the resolver was extracted from the leaf once
+the archive layer forced richer selection policy — are recorded in
+[ADR 0007](decisions/0007-retire-standalone-engine.md); the layer model in
+[ADR 0003](decisions/0003-four-layer-composition.md); first-class archives in
+[ADR 0008](decisions/0008-archives-as-probes.md).
+
+## Frontier
+
+The horizontal layers are strong — container and filesystem/archive readers implement
+their contracts in production. The two vertical layers are the remaining work: the
+`VolumeSystemOpen` (MBR/GPT/APM/VSS) and `EncryptionOpen` (BitLocker/LUKS/FileVault)
+readers exist as crates but are not yet wired to the contract. See [PRD §7](PRD.md) for
+the ranked coverage matrix and remaining work.

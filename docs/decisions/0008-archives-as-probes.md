@@ -26,8 +26,8 @@ Two facts from the settled post-engine-retirement architecture (ADR 0007, commit
    recursion is already automatic.
 2. The VFS is **one-trait-per-layer**, and each layer's trait is named for its primary
    `open()` method (the `Read`→read / `Write`→write idiom): `ContainerOpen`,
-   `VolumeSystemOpen`, `EncryptionOpen`, `FileSystemOpen` (plus the `Registry` dispatch
-   table) live in the leaf; the *concrete* probers and `default_registry()` live in the
+   `VolumeSystemOpen`, `EncryptionOpen`, `FileSystemOpen` (plus the `Openers` dispatch
+   table) live in the leaf; the *concrete* probers and `default_openers()` live in the
    consumer/orchestration layer, **outside** the leaf's dependency graph. Each `*Open`
    trait has two methods that are its two steps — `probe()` recognizes (dispatch), `open()`
    peels/decodes — so the archive layer deserves its own.
@@ -89,10 +89,10 @@ change and archive member trees no longer masquerade as filesystems, so the old
 `FsKind::from("tar" | "zip" | "7z")` mapping is retired. Every concrete decoder and its
 heavy dependencies (flate2, bzip2-rs, tar, `zip-forensic-core`, sevenz-rust2) live in an
 `archive-core` adapter behind a feature gate — never in the leaf. The consumer's
-`default_registry()` registers the one adapter through a new `.archive(...)` builder:
+`default_openers()` registers the one adapter through a new `.archive(...)` builder:
 
 ```rust
-Registry::new()
+Openers::new()
     // …existing container/volume/encryption/filesystem probers…
     .archive(archive_core::vfs::ArchiveAdapter)   // one ArchiveOpen: gz/bz2 + tar/zip/7z (+.tgz/.tbz2)
 ```

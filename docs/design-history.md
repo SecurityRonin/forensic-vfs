@@ -50,7 +50,7 @@ The contracts were hardened over two independent hostile-critic rounds. Recorded
 | 11 | Missing NTFS 100 ns (`WinFileTime`) resolution → tamper signal lost. | **Accepted.** Added `TimeResolution::WinFileTime`. |
 | 12 | No hardlink enumeration despite `nlink`. | **Accepted.** `FileSystem::hardlinks(ino)` added. |
 | 13 | Deterministic first-match on a `Yes` / `Yes` tie silently picks wrong FS. | **Accepted with nuance.** Hard `VfsError::Ambiguous` by default; opt-in `auto_pick` for batch, always with a finding. |
-| 14 | Shims-in-`disk-forensic` = god-crate + circular test dep (fig leaf). | **Accepted.** Registry / engine split into `forensic-vfs-engine`; `disk-forensic` thin CLI; readers unit-test against the leaf alone. |
+| 14 | Shims-in-`disk-forensic` = god-crate + circular test dep (fig leaf). | **Accepted.** `Openers` / engine split into `forensic-vfs-engine`; `disk-forensic` thin CLI; readers unit-test against the leaf alone. |
 
 **Biggest risk escalated:** conflation of thread-concurrency with data-mutability (the `&mut self` + `Mutex` serialization). Resolved by the `&self`-all-the-way-down model + positioned OS reads. Residual risk: making each FS reader cheaply `Sync`.
 
