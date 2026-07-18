@@ -1,5 +1,19 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.3](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-resolver-v0.1.2...forensic-vfs-resolver-v0.1.3) - 2026-07-18
+
+### Added
+
+- *(encryption-descent)* GREEN — resolver descends encryption (ADR 0010)
+# Changelog
+
 All notable changes to `forensic-vfs-resolver` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
