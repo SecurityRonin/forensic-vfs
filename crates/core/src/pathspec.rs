@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use crate::crypto::CryptoScheme;
+use crate::encryption::EncryptionScheme;
 use crate::fs::{FileId, FsKind, StreamId};
 use crate::registry::ContainerFormat;
 use crate::volume::VolumeScheme;
@@ -58,7 +58,7 @@ pub enum Layer {
         guid: Option<Guid>,
     },
     /// A full-disk-encryption translation (credentials supplied out-of-band).
-    Crypto { scheme: CryptoScheme },
+    Encryption { scheme: EncryptionScheme },
     /// A snapshot/shadow store.
     Snapshot { store: SnapshotRef },
     /// A mounted filesystem, addressing one node.

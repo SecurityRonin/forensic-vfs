@@ -6,7 +6,7 @@
 //! registration — so the dependency graph stays auditable and detection order is
 //! deterministic.
 
-use crate::crypto::CryptoLayer;
+use crate::encryption::EncryptionLayer;
 use crate::error::VfsResult;
 use crate::fs::{DynFs, FsKind};
 use crate::source::DynSource;
@@ -158,10 +158,10 @@ pub trait VolumeSystemProbe: Send + Sync {
 }
 
 /// Recognizes and opens a full-disk-encryption layer.
-pub trait CryptoProbe: Send + Sync {
-    fn scheme(&self) -> crate::crypto::CryptoScheme;
+pub trait EncryptionProbe: Send + Sync {
+    fn scheme(&self) -> crate::encryption::EncryptionScheme;
     fn probe(&self, w: &SniffWindow) -> Confidence;
-    fn open(&self, src: DynSource) -> VfsResult<Box<dyn CryptoLayer>>;
+    fn open(&self, src: DynSource) -> VfsResult<Box<dyn EncryptionLayer>>;
 }
 
 /// Recognizes and mounts a filesystem.
@@ -178,7 +178,7 @@ pub trait FileSystemProbe: Send + Sync {
 pub struct Registry {
     containers: Vec<Box<dyn ContainerDecoder>>,
     volume_systems: Vec<Box<dyn VolumeSystemProbe>>,
-    crypto: Vec<Box<dyn CryptoProbe>>,
+    encryption: Vec<Box<dyn EncryptionProbe>>,
     filesystems: Vec<Box<dyn FileSystemProbe>>,
 }
 
@@ -203,10 +203,10 @@ impl Registry {
         self
     }
 
-    /// Register a crypto prober.
+    /// Register a encryption prober.
     #[must_use]
-    pub fn crypto(mut self, p: impl CryptoProbe + 'static) -> Self {
-        self.crypto.push(Box::new(p));
+    pub fn encryption(mut self, p: impl EncryptionProbe + 'static) -> Self {
+        self.encryption.push(Box::new(p));
         self
     }
 
@@ -227,10 +227,10 @@ impl Registry {
     pub fn volume_systems(&self) -> &[Box<dyn VolumeSystemProbe>] {
         &self.volume_systems
     }
-    /// The registered crypto probers.
+    /// The registered encryption probers.
     #[must_use]
-    pub fn crypto_layers(&self) -> &[Box<dyn CryptoProbe>] {
-        &self.crypto
+    pub fn encryption_layers(&self) -> &[Box<dyn EncryptionProbe>] {
+        &self.encryption
     }
     /// The registered filesystem probers.
     #[must_use]

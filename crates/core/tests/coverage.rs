@@ -9,11 +9,11 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use forensic_vfs::adapters::{SourceCursor, SubRange};
-use forensic_vfs::crypto::CryptoScheme;
+use forensic_vfs::encryption::EncryptionScheme;
 use forensic_vfs::error::VfsResult;
 use forensic_vfs::fs::{ByteRun, ExtentStream, FsKind, NodeStream, RunAlloc, RunFlags, RunInfo};
 use forensic_vfs::registry::{
-    ContainerDecoder, ContainerFormat, CryptoProbe, FileSystemProbe, Registry, SniffWindow,
+    ContainerDecoder, ContainerFormat, EncryptionProbe, FileSystemProbe, Registry, SniffWindow,
     VolumeSystemProbe,
 };
 use forensic_vfs::source::{DynSource, ImageSource, SourceId};
@@ -98,16 +98,16 @@ fn every_volume_scheme_token_round_trips() {
 }
 
 #[test]
-fn every_crypto_scheme_token_round_trips() {
+fn every_encryption_scheme_token_round_trips() {
     for s in [
-        CryptoScheme::Bitlocker,
-        CryptoScheme::Luks1,
-        CryptoScheme::Luks2,
-        CryptoScheme::FileVault,
-        CryptoScheme::ApfsEncrypted,
-        CryptoScheme::VeraCrypt,
+        EncryptionScheme::Bitlocker,
+        EncryptionScheme::Luks1,
+        EncryptionScheme::Luks2,
+        EncryptionScheme::FileVault,
+        EncryptionScheme::ApfsEncrypted,
+        EncryptionScheme::VeraCrypt,
     ] {
-        uri_round_trips(&PathSpec::os("/x").push(Layer::Crypto { scheme: s }));
+        uri_round_trips(&PathSpec::os("/x").push(Layer::Encryption { scheme: s }));
     }
 }
 
@@ -153,16 +153,19 @@ impl VolumeSystemProbe for Vp {
     }
 }
 struct Cp;
-impl CryptoProbe for Cp {
-    fn scheme(&self) -> CryptoScheme {
-        CryptoScheme::Luks1
+impl EncryptionProbe for Cp {
+    fn scheme(&self) -> EncryptionScheme {
+        EncryptionScheme::Luks1
     }
     fn probe(&self, _w: &SniffWindow) -> forensic_vfs::Confidence {
         forensic_vfs::Confidence::No
     }
-    fn open(&self, _src: DynSource) -> VfsResult<Box<dyn forensic_vfs::crypto::CryptoLayer>> {
+    fn open(
+        &self,
+        _src: DynSource,
+    ) -> VfsResult<Box<dyn forensic_vfs::encryption::EncryptionLayer>> {
         Err(forensic_vfs::VfsError::Unsupported {
-            layer: "crypto",
+            layer: "encryption",
             scheme: "test".to_string(),
         })
     }
@@ -188,11 +191,11 @@ fn registry_builder_registers_each_kind() {
     let reg = Registry::new()
         .container(Dc)
         .volume_system(Vp)
-        .crypto(Cp)
+        .encryption(Cp)
         .filesystem(Fp);
     assert_eq!(reg.containers().len(), 1);
     assert_eq!(reg.volume_systems().len(), 1);
-    assert_eq!(reg.crypto_layers().len(), 1);
+    assert_eq!(reg.encryption_layers().len(), 1);
     assert_eq!(reg.filesystems().len(), 1);
     assert_eq!(reg.containers()[0].format(), ContainerFormat::Raw);
 }
@@ -241,7 +244,7 @@ fn from_uri_rejects_every_malformed_layer() {
         "fvfs:os:x|volume:gpt",            // missing index
         "fvfs:os:x|volume:gpt,0,tooshort", // bad guid len
         "fvfs:os:x|volume:gpt,0,zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", // 32 non-hex
-        "fvfs:os:x|crypto:zzz",
+        "fvfs:os:x|encryption:zzz",
         "fvfs:os:x|snapshot:zzz,1",
         "fvfs:os:x|snapshot:vss",          // missing ,id
         "fvfs:os:x|fs:zzz,p",              // bad fs kind
@@ -267,8 +270,8 @@ fn display_renders_every_layer_kind() {
             index: 2,
             guid: None,
         })
-        .push(Layer::Crypto {
-            scheme: CryptoScheme::Luks2,
+        .push(Layer::Encryption {
+            scheme: EncryptionScheme::Luks2,
         })
         .push(Layer::Snapshot {
             store: SnapshotRef::VssStore(1),
@@ -314,7 +317,7 @@ fn sourcecursor_current_and_negative_seek() {
 #[cfg(feature = "findings")]
 #[test]
 fn findings_default_surfaces_are_empty() {
-    use forensic_vfs::crypto::{CredentialSource, CryptoLayer};
+    use forensic_vfs::encryption::{CredentialSource, EncryptionLayer};
     use forensic_vfs::fs::{
         Allocation, DirStream, DynFs, FileId, FileSystem, FsMeta, MacbTimes, NodeKind,
         ResidencyKind, SectorSizes, StreamId, TimeZonePolicy,
@@ -391,9 +394,9 @@ fn findings_default_surfaces_are_empty() {
     }
 
     struct C;
-    impl CryptoLayer for C {
-        fn scheme(&self) -> CryptoScheme {
-            CryptoScheme::FileVault
+    impl EncryptionLayer for C {
+        fn scheme(&self) -> EncryptionScheme {
+            EncryptionScheme::FileVault
         }
         fn open(&self, _c: &dyn CredentialSource) -> VfsResult<DynSource> {
             Ok(Arc::new(MemSource(Vec::new())))

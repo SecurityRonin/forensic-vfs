@@ -42,7 +42,7 @@ contract.
 ## Object-safety of every trait
 
 The design rests on `Arc<dyn ImageSource>`, `Arc<dyn FileSystem>`,
-`Box<dyn VolumeSystem>`, and `Box<dyn CryptoLayer>` composing at runtime. A reader
+`Box<dyn VolumeSystem>`, and `Box<dyn EncryptionLayer>` composing at runtime. A reader
 double for each trait is driven through its trait object in
 `tests/contracts.rs`; if any trait lost object-safety the crate would fail to
 compile. The default forensic surface (`data_streams`, `hardlinks`, `slack`,

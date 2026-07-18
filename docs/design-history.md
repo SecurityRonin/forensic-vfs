@@ -16,14 +16,14 @@ history retains the full original.
 
 ## Prior art — what's borrowed, what's distinct
 
-Borrowed, deliberately: recursive path-spec (dfVFS / Velociraptor), image → volume-system → filesystem → file layering + `img_info` read-callback (TSK), loader auto-detect + `map` (dissect), VSS-volume-of-stores + crypto layers (libvshadow / dfVFS BDE/LUKSDE), the `trait SeekAndRead` / blanket-impl object-safety pattern (Rust `vfs`).
+Borrowed, deliberately: recursive path-spec (dfVFS / Velociraptor), image → volume-system → filesystem → file layering + `img_info` read-callback (TSK), loader auto-detect + `map` (dissect), VSS-volume-of-stores + encryption layers (libvshadow / dfVFS BDE/LUKSDE), the `trait SeekAndRead` / blanket-impl object-safety pattern (Rust `vfs`).
 
 Distinct capabilities:
 
 - **Read-only by construction, not convention.** The byte-source trait has no write method; immutability is a type property, not a documented promise. dfVFS / TSK / dissect are read-only by discipline; here a write is uncompilable.
 - **`&self` positioned-read parallel core.** `read_at(&self)` + `Send + Sync` + a concurrent cache gives lock-free-hot-path parallel reads over one shared stack — the Python references are single-reader-per-handle; TSK / libbfio are `Seek`-cursor based.
 - **Snapshots as typed first-class sub-volumes** bound to `state-history-forensic::TemporalCohort<H>` — a snapshot is a `Volume` with an `EpochTag`, so time-travel composes with the same navigation and correlation.
-- **One unified metadata + findings model** across container / volume / crypto / filesystem: every layer emits `forensicnomicon::report::Finding`; `FsMeta` carries per-timestamp source/resolution provenance and the name/meta allocation split in one record.
+- **One unified metadata + findings model** across container / volume / encryption / filesystem: every layer emits `forensicnomicon::report::Finding`; `FsMeta` carries per-timestamp source/resolution provenance and the name/meta allocation split in one record.
 - **Self-describing locator + serde, credentials out-of-band.** A `PathSpec` carries its whole open-recipe and round-trips through a report, session, or evidence row, while credentials stay out of the serialized address (fixing dfVFS's global-keychain footgun without leaking keys into reports).
 - **One detection engine for the whole fleet** (`4n6mount`, `issen`, `disk4n6` share one `Vfs`), replacing three parallel detect/dispatch implementations.
 
@@ -45,7 +45,7 @@ The contracts were hardened over two independent hostile-critic rounds. Recorded
 | 6 | Credentials in `PathSpec` + serde is a lose-lose (leak keys or lose them). | **Accepted.** Credentials removed from `PathSpec`; supplied via `CredentialSource` at resolve time. |
 | 7 | `comparable` string cache key collides (path bytes contain the delimiter). | **Accepted.** Identity via derived `Hash / Eq` on the enum; human `Display` percent-encodes. |
 | 8 | `read_dir -> Vec` OOMs on WinSxS-scale dirs. | **Accepted.** `read_dir -> DirStream` streaming iterator. |
-| 9 | No full-disk-encryption layer (BitLocker / LUKS / FileVault). | **Accepted.** New `CryptoLayer` between volume and FS. |
+| 9 | No full-disk-encryption layer (BitLocker / LUKS / FileVault). | **Accepted.** New `EncryptionLayer` between volume and FS. |
 | 10 | Silent degrade-to-`RawStream` on a prober-Yes-then-fail hides a populated partition. | **Accepted.** `Yes` / `Maybe`-then-fail ⇒ hard `Decode` error; `RawStream` only when NO prober matched, typed `Unknown` + bytes. |
 | 11 | Missing NTFS 100 ns (`WinFileTime`) resolution → tamper signal lost. | **Accepted.** Added `TimeResolution::WinFileTime`. |
 | 12 | No hardlink enumeration despite `nlink`. | **Accepted.** `FileSystem::hardlinks(ino)` added. |
@@ -58,7 +58,7 @@ The contracts were hardened over two independent hostile-critic rounds. Recorded
 
 | # | Critique | Resolution |
 |---|---|---|
-| 1 | Fixed layer order (`VS → Crypto → FS`) is fiction: whole-disk LUKS precedes partitioning; BitLocker sits inside a partition; APFS-encryption is container/volume metadata. | **Accepted (escalated).** Resolver reframed as a **per-node transform graph** — probe all four kinds at each `DynSource`, follow matches in any order. |
+| 1 | Fixed layer order (`VS → Encryption → FS`) is fiction: whole-disk LUKS precedes partitioning; BitLocker sits inside a partition; APFS-encryption is container/volume metadata. | **Accepted (escalated).** Resolver reframed as a **per-node transform graph** — probe all four kinds at each `DynSource`, follow matches in any order. |
 | 2 | `&self` + `Sync` FS lets `DirStream` / `ExtentStream` hold shard guards across `next()`; caller then locks another shard → deadlock. | **Accepted.** Lock-order contract added: streams hold **no lock across `next()`**; documented global lock order. |
 | 3 | `Box<dyn Iterator + Send + '_>` borrowing `&self` isn't spawn-friendly and forbids non-Send guards. | **Accepted.** Replaced with **owned `DirStream` / `ExtentStream` / `NodeStream`** holding `Arc<dyn FileSystem>` + a `'static` cursor. |
 | 4 | Cache coherence across derived sources (SubRange / decrypted / VSS) undefined; `SourceView` pins blocks invisibly. | **Accepted.** `SourceId` + parent lineage; base-source cache keys; pinned bytes budgeted separately from resident. |

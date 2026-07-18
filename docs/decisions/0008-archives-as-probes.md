@@ -8,7 +8,7 @@ A consumer that reads an evidence image must not know one packing format from
 another: `case.E01.gz` should resolve identically to `case.E01`, and
 `case.tgz`/`case.zip`/`case.7z` should surface their inner evidence the same way a
 GPT partition or a BitLocker volume does. Today that peeling lives in
-`archive-core` (`peel_detour`), which `disk-forensic` and `4n6mount` call *before*
+`archive-core` (`peel_archive`), which `disk-forensic` and `4n6mount` call *before*
 handing bytes to the VFS. That works, but it is a second, parallel detection
 on-ramp bolted in front of the resolver — the exact "N parallel detection stacks
 in N consumers" smell the VFS abstraction exists to remove.
@@ -24,7 +24,7 @@ Two facts from the settled post-engine-retirement architecture (ADR 0007, commit
    **container → volume → filesystem** layers recursively, re-sniffing each decoded
    `DynSource` a `ContainerDecoder::open` returns (`resolve.rs:133-143`). Container
    recursion is already automatic.
-2. The four probe traits (`ContainerDecoder`, `VolumeSystemProbe`, `CryptoProbe`,
+2. The four probe traits (`ContainerDecoder`, `VolumeSystemProbe`, `EncryptionProbe`,
    `FileSystemProbe`) and the `Registry` dispatch table live in the leaf; the
    *concrete* probers and `default_registry()` live in the consumer/orchestration
    layer, **outside** the leaf's dependency graph.
@@ -65,7 +65,7 @@ them via the existing builders:
 
 ```rust
 Registry::new()
-    // …existing container/volume/crypto/filesystem probers…
+    // …existing container/volume/encryption/filesystem probers…
     .container(archive_core::vfs::GzipDecoder)     // ContainerFormat::Gzip
     .container(archive_core::vfs::Bzip2Decoder)    // ContainerFormat::Bzip2
     .filesystem(archive_core::vfs::TarProbe)        // FsKind("tar")
@@ -76,7 +76,7 @@ Registry::new()
 ## Consequences
 
 - **One detection on-ramp.** Once the adapter is registered, `disk-forensic` and
-  `4n6mount` drop their pre-resolver `peel_detour` call: `resolve()` peels archives
+  `4n6mount` drop their pre-resolver `peel_archive` call: `resolve()` peels archives
   as ordinary layers, so every current and future VFS consumer gets archive
   transparency for free, with no per-consumer archive code.
 - **Zero dependency inversion.** The dependency arrow stays pointed *down onto* the
@@ -116,7 +116,7 @@ not by re-decompressing on every seek.
 
 Implementation consequence (tracked, not deferred as optional): `archive-core`'s peel is
 today in-memory with a hard output cap. It must move to **streaming temp-spill** —
-`peel_detour` returns a temp-backed seekable handle rather than an in-memory `Vec<u8>`,
+`peel_archive` returns a temp-backed seekable handle rather than an in-memory `Vec<u8>`,
 one decompression pass, member-selective. Both consumers (`disk-forensic`, `4n6mount`)
 already stage peeled evidence to temp before analysis, so the seam is an API shape change
 (temp handle vs `Vec<u8>`), not new behavior downstream. This is the O(n) requirement
@@ -262,7 +262,7 @@ and why the adapter must classify member sets before deciding peel vs mount vs r
 The contract is **defined and settled by this ADR**; the archive-core `vfs` adapter
 module and the `ContainerFormat::{Gzip,Bzip2}` variants are a follow-on. There is **no
 functional gap** meanwhile — `disk-forensic` and `4n6mount` already peel via
-`archive_core::peel_detour`, verified against their suites. This ADR replaces the
+`archive_core::peel_archive`, verified against their suites. This ADR replaces the
 earlier "hold until the engine retirement settles" note (the retirement has landed):
 the seam is now buildable whenever the adapter work is scheduled, against a registry
 that has stopped moving.

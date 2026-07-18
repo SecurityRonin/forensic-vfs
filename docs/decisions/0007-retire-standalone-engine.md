@@ -18,7 +18,7 @@ shapes were considered:
 Three roles across **two published crates**:
 
 1. **`forensic-vfs` — the contract leaf** (published, MSRV 1.85). The four trait contracts
-   (`ImageSource`, `VolumeSystem`, `CryptoLayer`, `FileSystem`), `Registry`, `PathSpec`,
+   (`ImageSource`, `VolumeSystem`, `EncryptionLayer`, `FileSystem`), `Registry`, `PathSpec`,
    `FsMeta`, `FsKind`, bounded-read helpers — **and the generic resolver** (`Registry::resolve`,
    `walk`, `snapshot_view`). The resolver is reader-independent (touches only the four traits,
    names no concrete format, adds no dependency), so it lives in the leaf as the **minimal
@@ -47,7 +47,7 @@ category as a trait default method.
 ### Resolver evolution (the one contested point — 2026-07-18 design panel: Fable / Gemini / Codex)
 
 Resolver *behavior* is forensic decision policy and it evolves (probe ordering, ambiguity, first-
-match vs multi-result, the coming archive-detour selection — ADR 0008). **Dependency-stability is
+match vs multi-result, the coming archive-layer selection — ADR 0008). **Dependency-stability is
 not behavioral-stability**: a zero-dep crate can still churn its behavior, and 17 readers pin this
 leaf. Therefore:
 
@@ -69,11 +69,11 @@ leaf. Therefore:
      draft feared, relocated). Delegate to `Registry::resolve`; keep the *separate* `open_base()`
      host bootstrap; add a golden-fixture test asserting `Vfs::open` produces the same resolved
      stack as a direct `Registry::resolve`.
-  2. **`Registry::resolve` descends filesystems/volumes/containers but NOT `CryptoProbe`** — so the
-     headline `E01 → GPT → BitLocker → NTFS` does not auto-resolve the crypto layer. Add a
-     crypto-descent path (with `CredentialSource` injection).
+  2. **`Registry::resolve` descends filesystems/volumes/containers but NOT `EncryptionProbe`** — so the
+     headline `E01 → GPT → BitLocker → NTFS` does not auto-resolve the encryption layer. Add a
+     encryption-descent path (with `CredentialSource` injection).
 - **Behavioral-semver discipline for the resolver:** deterministic probe ordering, ambiguity
-  reporting (not silent first-wins), golden-stack fixtures across container/volume/crypto/
+  reporting (not silent first-wins), golden-stack fixtures across container/volume/encryption/
   filesystem/archive, and an engine↔leaf compatibility test — because a heuristic change can alter
   forensic output without changing public types (`#[non_exhaustive]` alone does not cover that).
 

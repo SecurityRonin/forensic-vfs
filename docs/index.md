@@ -15,7 +15,7 @@ path can write.
 - **`FileSystem`** — `&self` navigation with owned `Send` streams; `FileId`
   (filesystem-specific identity), `FsMeta` with per-timestamp source/resolution
   provenance and the name/metadata allocation split.
-- **`VolumeSystem` / `CryptoLayer`** — partition/snapshot schemes and full-disk
+- **`VolumeSystem` / `EncryptionLayer`** — partition/snapshot schemes and full-disk
   encryption as distinct layers.
 - **`PathSpec`** — the recursive locator, with a lossless canonical URI and a
   lossy human form; credentials stay out of the serialized address.

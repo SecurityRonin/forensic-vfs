@@ -12,7 +12,7 @@
 
 **One read-only, positioned-read byte edge — `ImageSource` — that every disk, container, and filesystem reader in the fleet speaks, so a whole evidence stack (`E01 → GPT → BitLocker → NTFS`) composes as a single `Arc<dyn ImageSource>` that N workers read in parallel and no code path can write.**
 
-`forensic-vfs` is the KNOWLEDGE-leaf contract crate of the universal forensic VFS. It defines the layered model — byte source, volume system, crypto layer, filesystem, and the recursive `PathSpec` locator — plus the generic layer resolver (`Registry::resolve`, `walk`), and nothing that touches a concrete format: no parsing, no reader dependencies. Readers implement these traits and register in a `Registry`; the fleet orchestration layer wires the concrete readers and the `disk4n6` CLI over them.
+`forensic-vfs` is the KNOWLEDGE-leaf contract crate of the universal forensic VFS. It defines the layered model — byte source, volume system, encryption layer, filesystem, and the recursive `PathSpec` locator — plus the generic layer resolver (`Registry::resolve`, `walk`), and nothing that touches a concrete format: no parsing, no reader dependencies. Readers implement these traits and register in a `Registry`; the fleet orchestration layer wires the concrete readers and the `disk4n6` CLI over them.
 
 ## The one decision that shapes everything
 
@@ -77,7 +77,7 @@ concrete readers and drives `Registry::resolve` over them. Verified coverage (20
 | Containers | `ImageSource` | ewf (E01), qcow2, vmdk, vhdx, dmg — **5** |
 | Filesystems / archives | `FileSystem` | ntfs, fat, ext4, apfs, hfsplus, xfs, iso9660, udf, zip, ad1, dar — **11** |
 | Volumes | `VolumeSystem` | *none yet* (mbr/gpt/apm crates exist, unwired) |
-| Crypto | `CryptoLayer` | *none yet* (bitlocker/luks/filevault/veracrypt exist, unwired) |
+| Encryption | `EncryptionLayer` | *none yet* (bitlocker/luks/filevault/veracrypt exist, unwired) |
 
 The horizontal layers are strong; the two vertical layers are the frontier. Full
 architecture, the exact coverage matrix, and the design decisions:

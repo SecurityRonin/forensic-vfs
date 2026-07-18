@@ -12,7 +12,7 @@ use core::fmt;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use crate::crypto::CryptoScheme;
+use crate::encryption::EncryptionScheme;
 use crate::error::{SmallHex, VfsError, VfsResult};
 use crate::fs::{FileId, FsKind, StreamId};
 use crate::pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
@@ -139,25 +139,25 @@ fn parse_volume_scheme(t: &str, ctx: &str) -> VfsResult<VolumeScheme> {
         _ => return Err(err("unknown volume scheme", ctx)),
     })
 }
-fn crypto_token(s: CryptoScheme) -> &'static str {
+fn encryption_token(s: EncryptionScheme) -> &'static str {
     match s {
-        CryptoScheme::Bitlocker => "bitlocker",
-        CryptoScheme::Luks1 => "luks1",
-        CryptoScheme::Luks2 => "luks2",
-        CryptoScheme::FileVault => "filevault",
-        CryptoScheme::ApfsEncrypted => "apfsencrypted",
-        CryptoScheme::VeraCrypt => "veracrypt",
+        EncryptionScheme::Bitlocker => "bitlocker",
+        EncryptionScheme::Luks1 => "luks1",
+        EncryptionScheme::Luks2 => "luks2",
+        EncryptionScheme::FileVault => "filevault",
+        EncryptionScheme::ApfsEncrypted => "apfsencrypted",
+        EncryptionScheme::VeraCrypt => "veracrypt",
     }
 }
-fn parse_crypto(t: &str, ctx: &str) -> VfsResult<CryptoScheme> {
+fn parse_encryption(t: &str, ctx: &str) -> VfsResult<EncryptionScheme> {
     Ok(match t {
-        "bitlocker" => CryptoScheme::Bitlocker,
-        "luks1" => CryptoScheme::Luks1,
-        "luks2" => CryptoScheme::Luks2,
-        "filevault" => CryptoScheme::FileVault,
-        "apfsencrypted" => CryptoScheme::ApfsEncrypted,
-        "veracrypt" => CryptoScheme::VeraCrypt,
-        _ => return Err(err("unknown crypto scheme", ctx)),
+        "bitlocker" => EncryptionScheme::Bitlocker,
+        "luks1" => EncryptionScheme::Luks1,
+        "luks2" => EncryptionScheme::Luks2,
+        "filevault" => EncryptionScheme::FileVault,
+        "apfsencrypted" => EncryptionScheme::ApfsEncrypted,
+        "veracrypt" => EncryptionScheme::VeraCrypt,
+        _ => return Err(err("unknown encryption scheme", ctx)),
     })
 }
 fn parse_fs_kind(t: &str, ctx: &str) -> VfsResult<FsKind> {
@@ -329,7 +329,7 @@ fn layer_encode(l: &Layer) -> String {
             }
             s
         }
-        Layer::Crypto { scheme } => format!("crypto:{}", crypto_token(*scheme)),
+        Layer::Encryption { scheme } => format!("encryption:{}", encryption_token(*scheme)),
         Layer::Snapshot { store } => match store {
             SnapshotRef::VssStore(i) => format!("snapshot:vss,{i}"),
             SnapshotRef::ApfsXid(x) => format!("snapshot:apfs,{x}"),
@@ -373,8 +373,8 @@ fn layer_parse(s: &str) -> VfsResult<Layer> {
                 guid,
             })
         }
-        "crypto" => Ok(Layer::Crypto {
-            scheme: parse_crypto(body, s)?,
+        "encryption" => Ok(Layer::Encryption {
+            scheme: parse_encryption(body, s)?,
         }),
         "snapshot" => {
             let (kind, num) = body
@@ -458,7 +458,7 @@ impl fmt::Display for PathSpec {
                 Layer::Volume { scheme, index, .. } => {
                     write!(f, "{}#{index}", volume_token(*scheme))?;
                 }
-                Layer::Crypto { scheme } => write!(f, "{}", crypto_token(*scheme))?,
+                Layer::Encryption { scheme } => write!(f, "{}", encryption_token(*scheme))?,
                 Layer::Snapshot { store } => match store {
                     SnapshotRef::VssStore(i) => write!(f, "vss#{i}")?,
                     SnapshotRef::ApfsXid(x) => write!(f, "apfs@{x}")?,
@@ -493,7 +493,7 @@ impl<'de> serde::Deserialize<'de> for PathSpec {
 
 #[cfg(test)]
 mod tests {
-    use crate::crypto::CryptoScheme;
+    use crate::encryption::EncryptionScheme;
     use crate::fs::{FileId, FsKind, StreamId};
     use crate::pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
     use crate::registry::ContainerFormat;
@@ -555,8 +555,8 @@ mod tests {
             start: 512,
             len: 1_048_576,
         }));
-        roundtrip(&PathSpec::os("/x").push(Layer::Crypto {
-            scheme: CryptoScheme::Bitlocker,
+        roundtrip(&PathSpec::os("/x").push(Layer::Encryption {
+            scheme: EncryptionScheme::Bitlocker,
         }));
         roundtrip(&PathSpec::os("/x").push(Layer::Snapshot {
             store: SnapshotRef::VssStore(4),

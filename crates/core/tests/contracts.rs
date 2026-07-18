@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use forensic_vfs::crypto::{Credential, CredentialSource, CryptoLayer, CryptoScheme};
+use forensic_vfs::encryption::{Credential, CredentialSource, EncryptionLayer, EncryptionScheme};
 use forensic_vfs::error::{SmallHex, VfsError, VfsResult};
 use forensic_vfs::fs::{
     Allocation, DirEntry, DirStream, DynFs, ExtentStream, FileId, FileSystem, FsKind, FsMeta,
@@ -135,13 +135,13 @@ impl VolumeSystem for OneVolume {
 }
 
 struct Vault(DynSource);
-impl CryptoLayer for Vault {
-    fn scheme(&self) -> CryptoScheme {
-        CryptoScheme::Bitlocker
+impl EncryptionLayer for Vault {
+    fn scheme(&self) -> EncryptionScheme {
+        EncryptionScheme::Bitlocker
     }
     fn open(&self, creds: &dyn CredentialSource) -> VfsResult<DynSource> {
         if creds
-            .credentials_for(CryptoScheme::Bitlocker, "OS")
+            .credentials_for(EncryptionScheme::Bitlocker, "OS")
             .is_empty()
         {
             return Err(VfsError::NeedCredentials {
@@ -155,7 +155,7 @@ impl CryptoLayer for Vault {
 
 struct Keyring(bool);
 impl CredentialSource for Keyring {
-    fn credentials_for(&self, _scheme: CryptoScheme, _target: &str) -> Vec<Credential> {
+    fn credentials_for(&self, _scheme: EncryptionScheme, _target: &str) -> Vec<Credential> {
         if self.0 {
             vec![Credential::Password("hunter2".to_string())]
         } else {
@@ -244,10 +244,10 @@ fn volume_system_opens_a_volume_and_rejects_out_of_range() {
 }
 
 #[test]
-fn crypto_layer_needs_credentials_then_opens() {
+fn encryption_layer_needs_credentials_then_opens() {
     let plain: DynSource = Arc::new(MemSource(vec![1, 2, 3]));
-    let vault: Box<dyn CryptoLayer> = Box::new(Vault(plain));
-    assert_eq!(vault.scheme(), CryptoScheme::Bitlocker);
+    let vault: Box<dyn EncryptionLayer> = Box::new(Vault(plain));
+    assert_eq!(vault.scheme(), EncryptionScheme::Bitlocker);
     // No keys -> loud NeedCredentials, never a silent empty.
     assert!(matches!(
         vault.open(&Keyring(false)),
@@ -263,7 +263,7 @@ fn registry_collects_probers() {
     let reg = Registry::new();
     assert!(reg.containers().is_empty());
     assert!(reg.volume_systems().is_empty());
-    assert!(reg.crypto_layers().is_empty());
+    assert!(reg.encryption_layers().is_empty());
     assert!(reg.filesystems().is_empty());
 }
 
@@ -404,7 +404,7 @@ fn every_error_variant_renders() {
             detail: "no super".to_string(),
         },
         VfsError::Unsupported {
-            layer: "crypto",
+            layer: "encryption",
             scheme: "veracrypt".to_string(),
         },
         VfsError::Budget {

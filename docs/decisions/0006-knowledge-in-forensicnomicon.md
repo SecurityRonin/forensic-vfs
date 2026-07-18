@@ -15,7 +15,7 @@ different right answers.
 Split by kind:
 
 - **Knowledge → `forensicnomicon`.** One hub owns the facts: `report::Finding` (the shared
-  finding type every `VolumeSystem`/`CryptoLayer` returns), `temporal` hints,
+  finding type every `VolumeSystem`/`EncryptionLayer` returns), `temporal` hints,
   `boot_signatures`, `partition_schemes`, MITRE/LOLBin tables. Contracts depend *up* into
   it (`findings() -> forensicnomicon::report::Finding`).
 - **Implementation → dedicated crates.** Temporal computation lives in `timeglyph`

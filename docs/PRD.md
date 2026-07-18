@@ -16,7 +16,7 @@ partition window is invisible to it.
 
 Today the **horizontal layers are strong and the vertical layers are empty**: 5 container
 readers and 11 filesystem/archive readers implement their contracts in production; the
-`VolumeSystem` (partition) and `CryptoLayer` (encryption) contracts have **zero leaf
+`VolumeSystem` (partition) and `EncryptionLayer` (encryption) contracts have **zero leaf
 implementations** — the reader crates exist (MBR/GPT/APM, BitLocker/LUKS/FileVault/
 VeraCrypt) but none are wired to the contract yet. Closing those two layers is the
 primary remaining work (§7).
@@ -36,7 +36,7 @@ cursor, allocate an unbounded buffer, or panic on hostile input.
 
 ## 2. Goals
 
-- **One byte-source shape** every layer speaks, so containers, volumes, crypto, and
+- **One byte-source shape** every layer speaks, so containers, volumes, encryption, and
   filesystems stack by composition, not by bespoke glue.
 - **Read-only and concurrency-safe by construction** — a contract that *cannot* mutate
   evidence and *can* be shared across threads without interior locking leaking into the
@@ -55,7 +55,7 @@ cursor, allocate an unbounded buffer, or panic on hostile input.
 - **No mounting mechanism in the contract crate.** FUSE/inode adaptation lives in a
   separate consumer (`forensic-vfs-mount`); the contract knows nothing about inodes.
 - **No format detection in the leaf trait.** Probing is a separate concern
-  (`ContainerDecoder`/`VolumeSystemProbe`/`CryptoProbe`/`FileSystemProbe` registry
+  (`ContainerDecoder`/`VolumeSystemProbe`/`EncryptionProbe`/`FileSystemProbe` registry
   traits), so a leaf impl need not carry a sniffer.
 
 ## 4. The four contracts (as shipped)
@@ -103,17 +103,17 @@ pub trait VolumeSystem: Send + Sync {
 }
 ```
 
-**`CryptoLayer`** — an encryption layer that opens a decrypted sub-source (`crypto.rs`):
+**`EncryptionLayer`** — an encryption layer that opens a decrypted sub-source (`encryption.rs`):
 
 ```rust
-pub trait CryptoLayer: Send + Sync {
-    fn scheme(&self) -> CryptoScheme;
+pub trait EncryptionLayer: Send + Sync {
+    fn scheme(&self) -> EncryptionScheme;
     fn open(&self, creds: &dyn CredentialSource) -> VfsResult<DynSource>;  // -> a decrypted ImageSource
     fn findings(&self) -> VfsResult<Vec<forensicnomicon::report::Finding>> { /* default empty */ }
 }
 ```
 
-**Composition** is by return type: `VolumeSystem::open_volume` and `CryptoLayer::open`
+**Composition** is by return type: `VolumeSystem::open_volume` and `EncryptionLayer::open`
 both return `DynSource` (`Arc<dyn ImageSource>`), so the output of one layer is the input
 of the next. `SubRange` (`adapters.rs`) is the concrete adapter that windows a parent
 `ImageSource` into a partition/volume span — it is a struct that `impl ImageSource`, not a
@@ -133,7 +133,7 @@ contract.
 
 ## 6. Coverage matrix (verified 2026-07)
 
-Grounded in a fleet-wide grep for `impl (ImageSource|FileSystem|VolumeSystem|CryptoLayer) for`.
+Grounded in a fleet-wide grep for `impl (ImageSource|FileSystem|VolumeSystem|EncryptionLayer) for`.
 
 **`ImageSource` — 5 production impls:** ewf (E01), qcow2, vmdk, vhdx, dmg.
 - Crate exists, **no impl yet:** vhd-forensic, livedisk-forensic, disk-forensic.
@@ -148,7 +148,7 @@ zip, ad1, dar.
 **`VolumeSystem` — 0 impls.** mbr-partition-forensic, gpt-partition-forensic,
 apm-partition-forensic all exist; none implement the contract.
 
-**`CryptoLayer` — 0 impls.** bitlocker-forensic, luks-forensic, filevault-forensic,
+**`EncryptionLayer` — 0 impls.** bitlocker-forensic, luks-forensic, filevault-forensic,
 veracrypt-forensic all exist; none implement the contract.
 
 ## 7. Remaining work (the "finish the vision" gap)
@@ -158,7 +158,7 @@ Ranked by leverage — the two empty vertical layers unlock whole classes of evi
 1. **`VolumeSystem` for MBR/GPT/APM** — currently no partitioned image can be walked
    through the contract; `SubRange` exists to window volumes but nothing produces the
    windows. Highest leverage: every real disk image is partitioned.
-2. **`CryptoLayer` for BitLocker/LUKS/FileVault/VeraCrypt** — with §7.1 done, encrypted
+2. **`EncryptionLayer` for BitLocker/LUKS/FileVault/VeraCrypt** — with §7.1 done, encrypted
    volumes compose in. Depends on `CredentialSource` wiring.
 3. **`ImageSource` for vhd, and promote aff4 from test-only to production.**
 4. **`FileSystem` for btrfs/zfs/refs** (crates exist) and **exFAT/UFS** (new crates).

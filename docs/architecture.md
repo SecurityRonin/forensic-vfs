@@ -1,7 +1,7 @@
 # Architecture
 
 `forensic-vfs` defines six transform kinds, each a trait. They are **not a
-fixed lane** — the engine's resolver applies them as a graph, because crypto,
+fixed lane** — the engine's resolver applies them as a graph, because encryption,
 volume, and container layers nest in any order on real evidence.
 
 ```text
@@ -11,13 +11,13 @@ PathSpec (recursive locator)
 ImageSource  ── the universal edge: read-only positioned bytes ──────────┐
    ├── ContainerDecoder : E01/VMDK/VHDX/QCOW2/DMG/AFF4/AD1 → ImageSource  │  any of these
    ├── VolumeSystem     : MBR/GPT/APM/VSS/APFS-container    → ImageSource  │  transforms may
-   ├── CryptoLayer      : BitLocker/LUKS/FileVault          → ImageSource  │  apply, in any
+   ├── EncryptionLayer      : BitLocker/LUKS/FileVault          → ImageSource  │  apply, in any
    └── FileSystem       : NTFS/ext4/HFS+/APFS/ISO/UDF/FAT   → FsNode tree  ┘  order, per node
 ```
 
 Example nestings a graph handles that a fixed lane would not:
-`E01 → GPT → BitLocker → NTFS` (crypto after volume), `raw → LUKS → LVM → ext4`
-(crypto before volume), `E01 → APFS-container(encrypted volume) → APFS` (crypto
+`E01 → GPT → BitLocker → NTFS` (encryption after volume), `raw → LUKS → LVM → ext4`
+(encryption before volume), `E01 → APFS-container(encrypted volume) → APFS` (encryption
 is container metadata, not a separate step).
 
 ## The byte source
@@ -57,12 +57,12 @@ never stored in the address.
 
 | Crate | Role | Status |
 |---|---|---|
-| **`forensic-vfs`** | byte source, volume/crypto/filesystem traits, `PathSpec`, registry contracts | this crate |
+| **`forensic-vfs`** | byte source, volume/encryption/filesystem traits, `PathSpec`, registry contracts | this crate |
 | `forensic-vfs-engine` | registry + graph resolver + concurrent block cache, depending down on every reader | planned |
 | `disk-forensic` / `disk4n6` | thin CLI over the engine | evolving |
 
 Phasing (each step gated on the Case-001 Szechuan ingest, no regression): extract
 the leaf → build the engine over existing readers → collapse the issen disk
-wrappers → move 4n6mount onto the engine → add crypto/snapshots/nesting → in-tree
+wrappers → move 4n6mount onto the engine → add encryption/snapshots/nesting → in-tree
 reader trait impls. The full plan lives in the
 [design doc](https://github.com/SecurityRonin/disk-forensic/blob/main/docs/design/2026-07-06-universal-forensic-vfs.md).

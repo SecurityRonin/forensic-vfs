@@ -127,7 +127,7 @@ pub enum VfsError {
     #[error("budget exceeded: {cap} (limit {limit})")]
     Budget { cap: &'static str, limit: u64 },
 
-    /// A crypto layer needs credentials that were not supplied.
+    /// A encryption layer needs credentials that were not supplied.
     #[error("credentials required for {scheme} ({target})")]
     NeedCredentials {
         scheme: &'static str,

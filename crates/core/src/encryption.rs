@@ -1,4 +1,4 @@
-//! [`CryptoLayer`] — full-disk-encryption translation, a distinct layer between
+//! [`EncryptionLayer`] — full-disk-encryption translation, a distinct layer between
 //! volume and filesystem.
 //!
 //! BitLocker/LUKS/FileVault sit between a volume and its filesystem; the resolver
@@ -12,7 +12,7 @@ use crate::source::DynSource;
 /// The FDE scheme.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CryptoScheme {
+pub enum EncryptionScheme {
     Bitlocker,
     Luks1,
     Luks2,
@@ -22,7 +22,7 @@ pub enum CryptoScheme {
     VeraCrypt,
 }
 
-/// One credential offered to a crypto layer.
+/// One credential offered to a encryption layer.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum Credential {
@@ -42,13 +42,13 @@ pub trait CredentialSource: Send + Sync {
     /// Offer credentials for a target (a volume GUID / label / scheme name). An
     /// empty slice means "none available" — the layer then errors
     /// [`crate::error::VfsError::NeedCredentials`] rather than guessing.
-    fn credentials_for(&self, scheme: CryptoScheme, target: &str) -> Vec<Credential>;
+    fn credentials_for(&self, scheme: EncryptionScheme, target: &str) -> Vec<Credential>;
 }
 
-/// A cryptographic translation over one [`crate::ImageSource`]: consumes credentials +
+/// An encryption translation over one [`crate::ImageSource`]: consumes credentials +
 /// ciphertext sectors, presents a decrypted [`DynSource`].
-pub trait CryptoLayer: Send + Sync {
-    fn scheme(&self) -> CryptoScheme;
+pub trait EncryptionLayer: Send + Sync {
+    fn scheme(&self) -> EncryptionScheme;
     /// Present the decrypted volume. Errs `NeedCredentials` if keys are absent,
     /// `Decode` (loud, with the header bytes) on a bad key / unsupported cipher.
     fn open(&self, creds: &dyn CredentialSource) -> VfsResult<DynSource>;

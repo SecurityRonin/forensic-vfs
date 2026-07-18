@@ -14,7 +14,7 @@
 //! ImageSource  ── the universal edge: read-only positioned bytes ──────────┐
 //!    ├── ContainerDecoder : E01/VMDK/VHDX/… → ImageSource                   │  any of these
 //!    ├── VolumeSystem     : MBR/GPT/VSS/…    → ImageSource                   │  transforms may
-//!    ├── CryptoLayer      : BitLocker/LUKS/… → ImageSource                   │  apply, in any
+//!    ├── EncryptionLayer      : BitLocker/LUKS/… → ImageSource                   │  apply, in any
 //!    └── FileSystem       : NTFS/ext4/APFS/… → FsNode tree                   ┘  order, per node
 //! ```
 //!
@@ -39,7 +39,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod adapters;
-pub mod crypto;
+pub mod encryption;
 pub mod error;
 pub mod fs;
 pub mod pathspec;
@@ -49,7 +49,7 @@ pub mod source;
 pub mod uri;
 pub mod volume;
 
-pub use crypto::{Credential, CredentialSource, CryptoLayer, CryptoScheme};
+pub use encryption::{Credential, CredentialSource, EncryptionLayer, EncryptionScheme};
 pub use error::{SmallHex, VfsError, VfsResult};
 pub use fs::{
     Allocation, ByteRun, DirEntry, DirStream, DynFs, ExtentStream, FileId, FileSystem, FsKind,
@@ -59,7 +59,7 @@ pub use fs::{
 };
 pub use pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
 pub use registry::{
-    Confidence, ContainerDecoder, ContainerFormat, CryptoProbe, FileSystemProbe, Registry,
+    Confidence, ContainerDecoder, ContainerFormat, EncryptionProbe, FileSystemProbe, Registry,
     SniffWindow, VolumeSystemProbe,
 };
 pub use source::{read_exact_at, DynSource, Extent, Extents, ImageSource, SourceId, SourceView};
