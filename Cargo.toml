@@ -15,10 +15,11 @@ repository = "https://github.com/SecurityRonin/forensic-vfs"
 thiserror = "2"
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }
-# The canonical filesystem-identity newtype (`FsKind`) lives here. Zero-dep, so a
-# non-optional dep keeps the leaf/lean rule (design handoff): forensic-vfs
-# re-exports it as its own `FsKind`.
-forensicnomicon-core = "1.2"
+# The canonical filesystem-identity newtypes (`FsKind`, and now `FileId` per ADR
+# 0009) live here. Zero-dep, so a non-optional dep keeps the leaf/lean rule (design
+# handoff): forensic-vfs re-exports both as its own. FileId landed in
+# forensicnomicon-core 1.4.0, so this pins the published registry version.
+forensicnomicon-core = "1.4"
 # `findings` feature bridge — a non-default feature, so a reader that implements
 # these traits does not inherit the full forensicnomicon facade (the true-leaf
 # rule, design §4).

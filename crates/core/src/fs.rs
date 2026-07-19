@@ -12,24 +12,14 @@ use std::sync::Arc;
 
 use crate::error::VfsResult;
 
-/// Filesystem-specific stable identity. The address domain matches each FS's real
-/// identity primitive, so a reused slot is never confused with the original.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FileId {
-    /// NTFS MFT reference: record number + sequence.
-    NtfsRef { entry: u64, seq: u16 },
-    /// ext2/3/4 inode + generation.
-    ExtInode { ino: u64, gen: u32 },
-    /// APFS object id + transaction id.
-    ApfsOid { oid: u64, xid: u64 },
-    /// FAT/exFAT physical directory-entry address (no stable inode).
-    FatDirEntry { cluster: u32, index: u16 },
-    /// ISO 9660 path-table / extent address.
-    IsoExtent { block: u32 },
-    /// A filesystem with a plain inode and nothing finer.
-    Opaque(u64),
-}
+/// Filesystem-specific stable identity, re-exported from `forensicnomicon-core`
+/// (ADR 0009). The type moved down to the zero-dep KNOWLEDGE leaf so
+/// `state-history-forensic` can reuse it verbatim in the `[P]` evidential-address
+/// key without a wrong-direction dependency on this VFS layer. The re-export keeps
+/// every existing `forensic_vfs::FileId` import working unchanged — the address
+/// domain still matches each FS's real identity primitive, so a reused slot is
+/// never confused with the original.
+pub use forensicnomicon_core::FileId;
 
 /// A named data stream on a node: the default `$DATA`, an NTFS ADS, an HFS+
 /// resource fork, an xattr, or synthetic slack. Metadata only — the actual runs

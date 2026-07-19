@@ -208,6 +208,12 @@ fn file_id_token(id: FileId) -> String {
         FileId::FatDirEntry { cluster, index } => format!("fatdirentry.{cluster}.{index}"),
         FileId::IsoExtent { block } => format!("isoextent.{block}"),
         FileId::Opaque(n) => format!("opaque.{n}"),
+        // FileId is #[non_exhaustive] now that it lives in forensicnomicon-core
+        // (ADR 0009); every current variant is covered above, so this arm is
+        // unreachable against the present fn-core. A future upstream variant
+        // encodes to a sentinel that `parse_file_id` rejects (fail-loud round-trip)
+        // rather than silently mis-encoding.
+        _ => "unknown".to_string(), // cov:unreachable: all fn-core FileId variants covered
     }
 }
 fn parse_file_id(t: &str, ctx: &str) -> VfsResult<FileId> {
