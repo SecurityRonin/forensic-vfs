@@ -16,7 +16,9 @@ use forensic_vfs::{
     SectorSizes, SnapshotRef, SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc,
     VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemOpen,
 };
-use forensic_vfs_resolver::{epoch_from_create_time, snapshot_view, walk, Evidence, SourceOpen};
+use forensic_vfs_resolver::{
+    epoch_from_create_time, snapshot_view, walk, Evidence, ResolvedSource, SourceOpen,
+};
 
 // --- doubles -------------------------------------------------------------
 
@@ -681,6 +683,173 @@ fn an_archive_member_holding_no_fs_falls_through_to_none() {
         len: data.len() as u64,
     });
     assert!(reg.open(mem(data), base, 0).unwrap().is_none());
+}
+
+// --- resolve_to_source: raw-source terminal (ADR 0011) -------------------
+
+#[test]
+fn resolve_to_source_returns_a_bare_source_as_its_own_terminal() {
+    // A raw dump that no packaging (container/archive) prober claims IS the
+    // terminal: resolve_to_source hands it straight back, unwrapped.
+    let reg = Openers::new();
+    let data = b"RAWDUMP0".to_vec();
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let resolved: ResolvedSource = reg
+        .resolve_to_source(mem(data), base, 0)
+        .unwrap()
+        .expect("a bare source is its own raw terminal");
+    let mut buf = [0u8; 8];
+    let n = resolved.source.read_at(0, &mut buf).unwrap();
+    assert_eq!(n, 8);
+    assert_eq!(&buf, b"RAWDUMP0");
+}
+
+#[test]
+fn resolve_to_source_returns_the_innermost_stream_peel_not_none() {
+    // A gz-over-raw chain: a bare-wrapper archive peels to a raw memory-dump-like
+    // stream that NO filesystem prober claims. The disk `open()` terminal would
+    // discard this as `Ok(None)`; `resolve_to_source` must RETURN the peeled inner
+    // source (the raw bytes), never drop it.
+    let reg = Openers::new().archive(FakeArchive {
+        magic: b"GZIP",
+        members: false,
+        inner: (16, 256),
+    });
+    let mut data = b"GZIP".to_vec();
+    data.resize(16, 0);
+    data.extend_from_slice(b"RAWDUMP0"); // inner payload marker at the peel's start
+    data.resize(16 + 256, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    // Sanity: the disk terminal drops this non-filesystem source.
+    assert!(reg
+        .open(mem(data.clone()), base.clone(), 0)
+        .unwrap()
+        .is_none());
+    let resolved = reg
+        .resolve_to_source(mem(data), base, 0)
+        .unwrap()
+        .expect("the peeled stream is returned, not dropped");
+    let mut buf = [0u8; 8];
+    let n = resolved.source.read_at(0, &mut buf).unwrap();
+    assert_eq!(n, 8);
+    assert_eq!(
+        &buf, b"RAWDUMP0",
+        "returned source is the decoded inner stream"
+    );
+    // The locator records the bare (1→1) archive peel.
+    assert!(
+        resolved
+            .spec
+            .layers()
+            .iter()
+            .any(|l| matches!(l, Layer::Archive { member: None })),
+        "{}",
+        resolved.spec.to_uri()
+    );
+}
+
+#[test]
+fn resolve_to_source_returns_a_single_member_source() {
+    // A multi-member archive (1→N) with a single dump member: resolve_to_source
+    // returns that member's source and records `Layer::Archive { member: Some(0) }`.
+    let reg = Openers::new().archive(FakeArchive {
+        magic: b"ZIPM",
+        members: true,
+        inner: (16, 256),
+    });
+    let mut data = b"ZIPM".to_vec();
+    data.resize(16, 0);
+    data.extend_from_slice(b"RAWDUMP0");
+    data.resize(16 + 256, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let resolved = reg
+        .resolve_to_source(mem(data), base, 0)
+        .unwrap()
+        .expect("the member source is returned");
+    let mut buf = [0u8; 8];
+    resolved.source.read_at(0, &mut buf).unwrap();
+    assert_eq!(&buf, b"RAWDUMP0");
+    assert!(
+        resolved
+            .spec
+            .layers()
+            .iter()
+            .any(|l| matches!(l, Layer::Archive { member: Some(0) })),
+        "{}",
+        resolved.spec.to_uri()
+    );
+}
+
+#[test]
+fn resolve_to_source_peels_a_container_then_archive_nesting() {
+    // A container decodes to an inner region that is itself a bare-wrapper archive
+    // over the raw dump — proving the shared packaging descent recurses across both
+    // layer kinds and stops at the raw bytes (never a filesystem mount).
+    let reg = Openers::new()
+        .container(FakeContainer {
+            magic: b"CONT",
+            inner: (32, 512),
+            tail: false,
+        })
+        .archive(FakeArchive {
+            magic: b"GZIP",
+            members: false,
+            inner: (16, 256),
+        });
+    // [0..32) header w/ CONT magic; container decodes to [32..544):
+    //   at 32: GZIP magic; archive Stream decodes to [32+16 .. 32+16+256):
+    //     at 48: RAWDUMP0 marker.
+    let mut data = b"CONT".to_vec();
+    data.resize(32, 0);
+    data.extend_from_slice(b"GZIP"); // archive magic at the container payload start
+    data.resize(48, 0);
+    data.extend_from_slice(b"RAWDUMP0"); // raw marker at the archive stream start
+    data.resize(544, 0);
+    let base = PathSpec::root(Layer::Range {
+        start: 0,
+        len: data.len() as u64,
+    });
+    let resolved = reg
+        .resolve_to_source(mem(data), base, 0)
+        .unwrap()
+        .expect("container→archive→raw peels to the raw terminal");
+    let mut buf = [0u8; 8];
+    resolved.source.read_at(0, &mut buf).unwrap();
+    assert_eq!(&buf, b"RAWDUMP0");
+    let uri = resolved.spec.to_uri();
+    assert!(
+        uri.contains("container:") && uri.contains("archive:"),
+        "{uri}"
+    );
+    assert!(
+        !resolved
+            .spec
+            .layers()
+            .iter()
+            .any(|l| matches!(l, Layer::Fs { .. })),
+        "the source terminal never mounts a filesystem: {uri}"
+    );
+}
+
+#[test]
+fn resolve_to_source_is_depth_capped() {
+    // Past the bomb-guard depth cap, resolve_to_source yields None rather than
+    // recursing without bound — symmetric with the disk `open()` terminal.
+    let reg = Openers::new();
+    let base = PathSpec::root(Layer::Range { start: 0, len: 16 });
+    assert!(reg
+        .resolve_to_source(mem(vec![0u8; 16]), base, 100)
+        .unwrap()
+        .is_none());
 }
 
 // --- encryption descent (ADR 0010) ---------------------------------------

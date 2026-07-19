@@ -71,6 +71,19 @@ pub struct Resolved {
     pub source_spec: PathSpec,
 }
 
+/// One fully-peeled raw byte edge: the innermost [`DynSource`] no further
+/// *packaging* layer (archive/compression or bare container) claims, plus its
+/// locator (the archive-member / container layers it was unwrapped through). This
+/// is the medium-agnostic terminal of [`SourceOpen::resolve_to_source`] — the raw
+/// bytes a memory/log reader interprets, symmetric to the disk terminal's mounted
+/// filesystem (ADR 0011).
+pub struct ResolvedSource {
+    /// The fully-unwrapped raw byte edge.
+    pub source: DynSource,
+    /// Its locator, topped by the last packaging layer it was peeled through.
+    pub spec: PathSpec,
+}
+
 /// The generic layer resolver, exposed as an extension trait on the leaf's
 /// [`Openers`]. Bring it into scope (`use forensic_vfs_resolver::SourceOpen;`) to
 /// call `openers.open(source, spec, 0)`.
@@ -118,6 +131,44 @@ pub trait SourceOpen {
         depth: usize,
         creds: &dyn CredentialSource,
     ) -> VfsResult<Option<Resolved>>;
+
+    /// Resolve a source to its innermost raw byte edge by peeling **only** the
+    /// medium-agnostic packaging layers — archive/compression (ADR 0008) plus a
+    /// bare container decode — and returning that [`ResolvedSource`] instead of
+    /// requiring a filesystem mount (ADR 0011).
+    ///
+    /// This is the terminal a memory- or log-dump reader wants: `memf` receives
+    /// the raw physical-page stream unwrapped from `memory.raw.gz` /
+    /// `memory.zip` / `dump.7z` without re-implementing archive detection, then
+    /// runs its own format detection over the bytes. It is orthogonal to the
+    /// downstream medium — the same peel the disk [`SourceOpen::open`] path uses,
+    /// stopping one step earlier.
+    ///
+    /// **Where it stops:** after archive and bare-container peeling only. It does
+    /// **not** run the filesystem, volume-system, or encryption descent — those
+    /// are disk *interpretation*, not packaging unwrap, and a memory dump is a
+    /// single flat stream, not a partitioned/encrypted disk. A source that no
+    /// packaging prober claims is its own terminal and is returned as-is (a bare
+    /// `memory.raw` / `.dd`). Container decode is included because a container is a
+    /// packaging wrapper over a flat stream; volume/encryption/filesystem are not.
+    ///
+    /// For a multi-member archive each member is tried in order and the first that
+    /// peels to a terminal wins (the single-dump case); a caller wanting every
+    /// member enumerates at the front-end.
+    ///
+    /// `depth` is the current nesting level; callers start at `0`. Past the
+    /// packaging depth cap it yields `Ok(None)` (a self-referential-container bomb
+    /// guard), symmetric with [`SourceOpen::open`].
+    ///
+    /// # Errors
+    /// Propagates a source read error, or a container/archive `open`/decode failure
+    /// raised after a positive probe verdict.
+    fn resolve_to_source(
+        &self,
+        source: DynSource,
+        spec: PathSpec,
+        depth: usize,
+    ) -> VfsResult<Option<ResolvedSource>>;
 }
 
 impl SourceOpen for Openers {
@@ -184,51 +235,16 @@ impl SourceOpen for Openers {
         )? {
             return Ok(Some(found));
         }
-        for cd in self.containers() {
-            if cd.probe(&window).is_candidate() {
-                let decoded = cd.open(source.clone())?;
-                let child = spec.clone().push(Layer::Container {
-                    format: cd.format(),
-                });
-                if let Some(found) = self.open_with_credentials(decoded, child, depth + 1, creds)? {
-                    return Ok(Some(found));
-                }
-            }
-        }
-        // Archive descent (ADR 0008): a bare gz/bz2 wrapper peels to a single
-        // decoded stream (1→1) that re-enters resolution like a container decode;
-        // a multi-member archive peels to a member table (1→N) whose members each
-        // re-enter. The member index selected is carried in the locator via
-        // `Layer::Archive { member }`, mirroring the volume-system multi-volume
-        // descent (first sub-source that resolves to a filesystem wins).
-        for ar in self.archives() {
-            if ar.probe(&window).is_candidate() {
-                match ar.open(source.clone())? {
-                    ArchiveContents::Stream(inner) => {
-                        let child = spec.clone().push(Layer::Archive { member: None });
-                        if let Some(found) =
-                            self.open_with_credentials(inner, child, depth + 1, creds)?
-                        {
-                            return Ok(Some(found));
-                        }
-                    }
-                    ArchiveContents::Members(members) => {
-                        for (index, member) in members.into_iter().enumerate() {
-                            let child = spec.clone().push(Layer::Archive {
-                                member: Some(index),
-                            });
-                            if let Some(found) =
-                                self.open_with_credentials(member.source, child, depth + 1, creds)?
-                            {
-                                return Ok(Some(found));
-                            }
-                        }
-                    }
-                    // A future `#[non_exhaustive]` ArchiveContents variant this
-                    // resolver predates: fall through like an unrecognized source.
-                    _ => {} // cov:unreachable: no other ArchiveContents variant exists today
-                }
-            }
+        // Container + archive (ADR 0008) descent — the medium-agnostic packaging
+        // peel, shared with `resolve_to_source` (ADR 0011). Here the continuation
+        // is the FULL disk descent over each peeled child, so a container/archive
+        // that wraps a filesystem still mounts it.
+        if let Some(found) =
+            descend_packaging(self, &window, &source, &spec, depth, &mut |src, sp, d| {
+                self.open_with_credentials(src, sp, d, creds)
+            })?
+        {
+            return Ok(Some(found));
         }
         // Encryption descent (ADR 0010), credential-attempt last resort — only
         // reached when nothing above claimed the source.
@@ -241,6 +257,96 @@ impl SourceOpen for Openers {
             &credential_attempt,
         )
     }
+
+    fn resolve_to_source(
+        &self,
+        source: DynSource,
+        spec: PathSpec,
+        depth: usize,
+    ) -> VfsResult<Option<ResolvedSource>> {
+        if depth > MAX_DEPTH {
+            return Ok(None);
+        }
+        let (head, n, tail, tn, total) = read_sniff_buffers(&source)?;
+        let window = SniffWindow::with_tail(
+            0,
+            head.get(..n).unwrap_or(&[]),
+            total,
+            tail.get(..tn).unwrap_or(&[]),
+        );
+        // Peel only the medium-agnostic packaging layers, re-entering
+        // `resolve_to_source` (NOT the disk descent) on each peeled child.
+        if let Some(found) =
+            descend_packaging(self, &window, &source, &spec, depth, &mut |src, sp, d| {
+                self.resolve_to_source(src, sp, d)
+            })?
+        {
+            return Ok(Some(found));
+        }
+        // No packaging layer claimed it: this source is the raw terminal.
+        Ok(Some(ResolvedSource { source, spec }))
+    }
+}
+
+/// Try each container decoder, then each archive peeler, against `window`; for the
+/// first prober that claims `source`, invoke `recurse` on the peeled child
+/// source(s) with the layer-extended locator, returning its first `Some`. The
+/// container/archive descent lives here once (ADR 0008/0011) so both the disk
+/// filesystem terminal ([`SourceOpen::open_with_credentials`]) and the raw-source
+/// terminal ([`SourceOpen::resolve_to_source`]) share it — `recurse` is the
+/// caller's continuation (a full disk descent, or a packaging-only re-entry).
+///
+/// A bare gz/bz2 wrapper peels to one decoded [`ArchiveContents::Stream`] (1→1); a
+/// multi-member archive peels to a [`ArchiveContents::Members`] table (1→N) whose
+/// members are each tried in order (first that resolves wins). The selected member
+/// index is recorded in the locator via `Layer::Archive { member }`, mirroring the
+/// volume-system multi-volume descent. A free function, not a method, for the same
+/// orphan-rule reason as [`SourceOpen`].
+fn descend_packaging<T>(
+    openers: &Openers,
+    window: &SniffWindow,
+    source: &DynSource,
+    spec: &PathSpec,
+    depth: usize,
+    recurse: &mut dyn FnMut(DynSource, PathSpec, usize) -> VfsResult<Option<T>>,
+) -> VfsResult<Option<T>> {
+    for cd in openers.containers() {
+        if cd.probe(window).is_candidate() {
+            let decoded = cd.open(source.clone())?;
+            let child = spec.clone().push(Layer::Container {
+                format: cd.format(),
+            });
+            if let Some(found) = recurse(decoded, child, depth + 1)? {
+                return Ok(Some(found));
+            }
+        }
+    }
+    for ar in openers.archives() {
+        if ar.probe(window).is_candidate() {
+            match ar.open(source.clone())? {
+                ArchiveContents::Stream(inner) => {
+                    let child = spec.clone().push(Layer::Archive { member: None });
+                    if let Some(found) = recurse(inner, child, depth + 1)? {
+                        return Ok(Some(found));
+                    }
+                }
+                ArchiveContents::Members(members) => {
+                    for (index, member) in members.into_iter().enumerate() {
+                        let child = spec.clone().push(Layer::Archive {
+                            member: Some(index),
+                        });
+                        if let Some(found) = recurse(member.source, child, depth + 1)? {
+                            return Ok(Some(found));
+                        }
+                    }
+                }
+                // A future `#[non_exhaustive]` ArchiveContents variant this
+                // resolver predates: fall through like an unrecognized source.
+                _ => {} // cov:unreachable: no other ArchiveContents variant exists today
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// The owned head/tail sniff buffers of a source, plus their filled lengths and
