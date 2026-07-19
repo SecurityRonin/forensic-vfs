@@ -56,10 +56,10 @@ pub use encryption::{
 };
 pub use error::{SmallHex, VfsError, VfsResult};
 pub use fs::{
-    Allocation, ByteRun, DirEntry, DirStream, DynFs, ExtentStream, FileId, FileSystem, FsKind,
-    FsMeta, HardLink, MacbTimes, NodeKind, NodeStream, ResidencyKind, RunAlloc, RunFlags, RunInfo,
-    SectorSizes, StreamId, StreamInfo, StreamKind, TimeResolution, TimeSource, TimeStamp,
-    TimeZonePolicy,
+    Allocation, ByteRun, DeletedNode, DeletedStream, DirEntry, DirStream, DynFs, ExtentStream,
+    FileId, FileSystem, FsKind, FsMeta, HardLink, MacbTimes, NodeKind, NodeStream, ResidencyKind,
+    RunAlloc, RunFlags, RunInfo, SectorSizes, StreamId, StreamInfo, StreamKind, TimeResolution,
+    TimeSource, TimeStamp, TimeZonePolicy,
 };
 pub use pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
 pub use registry::{
