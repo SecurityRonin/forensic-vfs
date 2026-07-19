@@ -240,6 +240,28 @@ pub struct FsMeta {
     pub link_target: Option<Vec<u8>>,
 }
 
+/// A recovered deleted (or orphaned) node: the identity a consumer needs to
+/// render it. Unlike the bare [`FsMeta`] that [`FileSystem::deleted`] yields,
+/// this carries a readable [`FileId`] (so its bytes read via
+/// [`FileSystem::read_at`] / [`FileSystem::extents`]), the recovered `name`
+/// (possibly partial — a filesystem may destroy part of the name on delete,
+/// e.g. FAT's `0xE5` first byte), and the `parent` directory (`None` = orphan:
+/// the parent is unknown or unrecoverable). `meta` carries allocation status
+/// and MACB times.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedNode {
+    /// Readable identity — usable with `read_at` / `extents` / `meta`.
+    pub id: FileId,
+    /// The recovered name. May be empty or partial when the filesystem
+    /// destroyed it on delete; never fabricated.
+    pub name: Vec<u8>,
+    /// The parent directory, or `None` for an orphan (unrecoverable parent).
+    pub parent: Option<FileId>,
+    /// Allocation status ([`Allocation::Deleted`] or [`Allocation::Orphan`])
+    /// plus size and MACB times.
+    pub meta: FsMeta,
+}
+
 /// An owned, `Send`, `'static` stream of directory entries — holds no borrow of
 /// `&self` and no lock across `next()`, so it moves to a worker thread freely.
 pub struct DirStream(Box<dyn Iterator<Item = VfsResult<DirEntry>> + Send>);
@@ -296,6 +318,29 @@ impl Iterator for NodeStream {
     }
 }
 
+/// An owned, `Send`, `'static` stream of [`DeletedNode`]s — the rich
+/// deleted-enumeration surface (identity + name + parent), distinct from the
+/// bare-[`FsMeta`] [`NodeStream`].
+pub struct DeletedStream(Box<dyn Iterator<Item = VfsResult<DeletedNode>> + Send>);
+impl DeletedStream {
+    /// Wrap any `Send + 'static` iterator of deleted nodes.
+    pub fn new(it: impl Iterator<Item = VfsResult<DeletedNode>> + Send + 'static) -> Self {
+        Self(Box::new(it))
+    }
+    /// An empty stream — the default for a reader that cannot recover deleted
+    /// identities.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(Box::new(std::iter::empty()))
+    }
+}
+impl Iterator for DeletedStream {
+    type Item = VfsResult<DeletedNode>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
 /// The filesystem family — the canonical identity newtype from
 /// forensicnomicon-core (`FsKind::NTFS`, `FsKind::EXT`, …).
 pub use forensicnomicon_core::filesystems::FsKind;
@@ -334,6 +379,17 @@ pub trait FileSystem: Send + Sync {
     }
     /// Deleted/orphan nodes, streamed (never an eager `Vec`).
     fn deleted(&self) -> VfsResult<NodeStream>;
+    /// Deleted/orphan nodes with recovered identity — a readable [`FileId`],
+    /// name, and parent — so a consumer can render a deleted file in place (or
+    /// route an orphan to a bucket) and read its bytes. The default is an
+    /// **empty** stream: a reader opts in by overriding this once it can
+    /// recover the name + parent + id from its on-disk structures (e.g. NTFS
+    /// `$FILE_NAME` + the MFT reference). It never fabricates an entry. This is
+    /// the surface [`deleted`](Self::deleted) cannot provide — that one yields
+    /// bare [`FsMeta`] with no id to read the node.
+    fn deleted_nodes(&self) -> VfsResult<DeletedStream> {
+        Ok(DeletedStream::empty())
+    }
     /// Unallocated runs, streamed.
     fn unallocated(&self) -> VfsResult<ExtentStream>;
     /// File slack for a stream, if the FS exposes it.
