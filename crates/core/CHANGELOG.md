@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-v0.4.3...forensic-vfs-v0.5.0) - 2026-07-19
+
+### Added
+
+- *(core)* re-export FileId from forensicnomicon-core, pin fn-core 1.4 (ADR 0009)
+
 ## [0.4.3](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-v0.4.2...forensic-vfs-v0.4.3) - 2026-07-19
 
 ### Added
