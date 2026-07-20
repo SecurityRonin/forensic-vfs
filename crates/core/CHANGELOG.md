@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-v0.5.0...forensic-vfs-v0.6.0) - 2026-07-20
+
+### Added
+
+- *(core)* [**breaking**] rename PathSpec->Locator, os:->file:, fvfs:->loc: (ADR 0012/0013)
+
 ## [0.5.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-v0.4.3...forensic-vfs-v0.5.0) - 2026-07-19
 
 ### Added
