@@ -144,3 +144,19 @@ impl Locator {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Layer, Locator};
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_os_alias_matches_file() {
+        // The one-release compat shim (ADR 0013): `Locator::os()` must behave
+        // identically to the renamed `Locator::file()`, including seeding the
+        // renamed `Layer::File` base variant.
+        let via_os = Locator::os("/evidence/DC01.E01");
+        assert_eq!(via_os, Locator::file("/evidence/DC01.E01"));
+        assert!(matches!(via_os.layer, Layer::File { .. }));
+    }
+}
