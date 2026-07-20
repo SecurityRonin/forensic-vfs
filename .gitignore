@@ -1,6 +1,5 @@
 /target
 **/*.rs.bk
-Cargo.lock
 .DS_Store
 Thumbs.db
 .idea/
@@ -9,3 +8,4 @@ Thumbs.db
 /site
 fuzz/target
 fuzz/corpus
+fuzz/Cargo.lock
