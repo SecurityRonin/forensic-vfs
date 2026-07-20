@@ -18,7 +18,7 @@ path can write.
   `&self` navigation with owned `Send` streams; `FileId` (filesystem-specific
   identity), `FsMeta` (per-timestamp source/resolution provenance and the
   name/metadata allocation split), and `FsKind` (open newtype).
-- **`PathSpec`** — the recursive locator, with a lossless canonical URI and a
+- **`Locator`** — the recursive locator, with a lossless canonical URI and a
   lossy human form; credentials stay out of the serialized address.
 - **`Openers`** — the compiled-in probe dispatch table the engine fills; the
   sibling `forensic-vfs-resolver` walks it via `SourceOpen` to peel a whole stack.

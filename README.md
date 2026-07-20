@@ -179,29 +179,29 @@ case.zip holding case.E01
          → EncryptionOpen(BitLocker) → FileSystemOpen(NTFS) → file tree   (deep)
 ```
 
-Real evidence nests in any order — `raw → LUKS → LVM → ext4` (encryption before volume), `E01 → APFS-container(encrypted) → APFS` (encryption is container metadata) — so `SourceOpen` is a per-node graph, not a fixed stack. The `PathSpec` records the full path taken. Composition is exactly **five transform kinds** — container · archive · volume · encryption · filesystem ([ADR 0003](docs/decisions/0003-four-layer-composition.md)).
+Real evidence nests in any order — `raw → LUKS → LVM → ext4` (encryption before volume), `E01 → APFS-container(encrypted) → APFS` (encryption is container metadata) — so `SourceOpen` is a per-node graph, not a fixed stack. The `Locator` records the full path taken. Composition is exactly **five transform kinds** — container · archive · volume · encryption · filesystem ([ADR 0003](docs/decisions/0003-four-layer-composition.md)).
 
-## Address any node with a `PathSpec`
+## Address any node with a `Locator`
 
-A `PathSpec` is the recursive, self-describing locator a finding cites and a session re-opens. It round-trips byte-for-byte through a canonical URI (a fuzz-enforced invariant):
+A `Locator` is the recursive, self-describing locator a finding cites and a session re-opens. It round-trips byte-for-byte through a canonical URI (a fuzz-enforced invariant):
 
 ```rust
-use forensic_vfs::PathSpec;
+use forensic_vfs::Locator;
 
-let spec = PathSpec::from_uri(
-    "fvfs:os:%2Fevidence%2FDC01.E01|container:ewf|volume:gpt,1|fs:ntfs,p/Windows/System32/config/SYSTEM",
+let spec = Locator::from_uri(
+    "loc:file:%2Fevidence%2FDC01.E01|container:ewf|volume:gpt,1|fs:ntfs,p/Windows/System32/config/SYSTEM",
 )?;
-assert_eq!(PathSpec::from_uri(&spec.to_uri())?, spec); // lossless
+assert_eq!(Locator::from_uri(&spec.to_uri())?, spec); // lossless
 # Ok::<(), forensic_vfs::VfsError>(())
 ```
 
-Every byte outside `[A-Za-z0-9._-]` is percent-encoded, so a Windows path containing `/` or a non-UTF-8 filename survives intact. Credentials never live in the address — they are supplied out-of-band through a `CredentialSource` at open time.
+Every byte outside `[A-Za-z0-9._-]` is percent-encoded, so a Windows path containing `/` or a non-UTF-8 filename survives intact. Credentials never live in the address — they are supplied out-of-band through a `CredentialSource` at open time. Legacy `fvfs:` / `os:` URIs still decode, so addresses serialized before the rename keep resolving.
 
 ## Crate topology
 
 | Crate | Role |
 |---|---|
-| **`forensic-vfs`** (0.4) | the contract leaf — `ImageSource`, the five `*Open` traits, `Openers`, `PathSpec`, `FsMeta`, `FsKind` |
+| **`forensic-vfs`** (0.4) | the contract leaf — `ImageSource`, the five `*Open` traits, `Openers`, `Locator`, `FsMeta`, `FsKind` |
 | **`forensic-vfs-resolver`** (0.1) | the `SourceOpen` orchestrator — `impl SourceOpen for Openers`, recursive descent, `walk`, `snapshot_view` |
 | **`forensic-vfs-engine`** ([repo](https://github.com/SecurityRonin/forensic-vfs-engine)) | `default_openers()` wiring the ~17 concrete readers + `Vfs::open(path)` host bootstrap |
 
@@ -209,7 +209,7 @@ A consumer depends on the abstraction (leaf + resolver), never on a per-format r
 
 ## Trust but verify
 
-- **Fuzzed.** The `PathSpec` URI parser and the bounded readers are fuzzed — 15.7M + 20.2M executions with no panic, the round-trip invariant holding throughout.
+- **Fuzzed.** The `Locator` URI parser and the bounded readers are fuzzed — 15.7M + 20.2M executions with no panic, the round-trip invariant holding throughout.
 - **Panic-free by lint.** `unsafe_code = forbid`; `unwrap_used`/`expect_used` denied; every offset/length read goes through bounded readers that return 0, never panic, out of range.
 - **100% line coverage**, with object-safety of every trait proven by a reader double driven through `Arc<dyn Trait>`.
 

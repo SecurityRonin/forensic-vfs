@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-`forensic-vfs` 0.1.0 is **published** (the leaf was renamed from `forensic-vfs-core`; that name is intentionally gone from crates.io — do not re-publish or "fix" it). The leaf defines the abstract contracts (`ImageSource`, `FileSystem`, `PathSpec`, `Registry` + probe traits) but has **zero consumers** — nothing implements or calls them yet. Phase 2 wires the first proven pair (ewf + NTFS) onto the contracts.
+`forensic-vfs` 0.1.0 is **published** (the leaf was renamed from `forensic-vfs-core`; that name is intentionally gone from crates.io — do not re-publish or "fix" it). The leaf defines the abstract contracts (`ImageSource`, `FileSystem`, `Locator`, `Registry` + probe traits) but has **zero consumers** — nothing implements or calls them yet. Phase 2 wires the first proven pair (ewf + NTFS) onto the contracts.
 
 **Status:** the spike de-risked the trait shape (source side fits trivially; FS side needed `ntfs-core` to grow), and **Step 1 is done** — `ntfs-core` now serves all reads through `&self` with FileId-addressed read primitives, on a local branch, strict TDD, fully green. Steps 2–4 (the actual trait impls + end-to-end proof) remain.
 

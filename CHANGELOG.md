@@ -52,7 +52,7 @@ All notable changes to `forensic-vfs` are documented here. The format follows
 - First-class filesystem identities for **btrfs, zfs, ufs, refs, zip, ad1, dar** (carried
   by the newtype's `known()` set), reachable through the `fs:<kind>` URI locator.
 - **The generic layer resolver now lives in the core leaf as `Registry::resolve`.** Given a
-  `DynSource` and a starting `PathSpec`, it sniffs a head+tail window, matches the registered
+  `DynSource` and a starting `Locator`, it sniffs a head+tail window, matches the registered
   filesystem/volume-system/container probers, and descends container→volume→filesystem to a
   mounted `dyn FileSystem` (depth-capped, panic-free). The supporting generic surface moves
   with it: `Resolved`, `Evidence`, `SnapshotView` + `snapshot_view` / `epoch_from_create_time`
@@ -70,6 +70,6 @@ All notable changes to `forensic-vfs` are documented here. The format follows
 
 ### Removed
 
-- **BREAKING: the `FsKind::Other` variant.** An unrecognized `fs:` token in a `PathSpec`
+- **BREAKING: the `FsKind::Other` variant.** An unrecognized `fs:` token in a `Locator`
   URI is now a hard decode error rather than collapsing to `Other` — an unknown filesystem
   is surfaced, not silently absorbed.

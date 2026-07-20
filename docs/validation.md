@@ -1,16 +1,16 @@
 # Validation
 
 `forensic-vfs` is a contract crate: it defines traits and one value-producing
-codec (the `PathSpec` canonical URI). Correctness is established by the evidence
+codec (the `Locator` canonical URI). Correctness is established by the evidence
 below, tiered honestly by *what confirms it*.
 
-## The PathSpec URI codec — property-checked + fuzzed
+## The Locator URI codec — property-checked + fuzzed
 
 The URI form is **our own format**, so no external tool decodes it — there is no
 independent oracle to differential against. Correctness is therefore defined by a
 *self-checking property*, not a hand-authored answer key:
 
-> **Round-trip invariant.** For every `PathSpec`, `from_uri(to_uri(spec)) == spec`,
+> **Round-trip invariant.** For every `Locator`, `from_uri(to_uri(spec)) == spec`,
 > byte-for-byte.
 
 This is stronger than a fixture-with-expected-output (the LZNT1 trap): the test

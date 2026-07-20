@@ -24,7 +24,7 @@ Distinct capabilities:
 - **`&self` positioned-read parallel core.** `read_at(&self)` + `Send + Sync` + a concurrent cache gives lock-free-hot-path parallel reads over one shared stack — the Python references are single-reader-per-handle; TSK / libbfio are `Seek`-cursor based.
 - **Snapshots as typed first-class sub-volumes** bound to `state-history-forensic::TemporalCohort<H>` — a snapshot is a `Volume` with an `EpochTag`, so time-travel composes with the same navigation and correlation.
 - **One unified metadata + findings model** across container / volume / encryption / filesystem: every layer emits `forensicnomicon::report::Finding`; `FsMeta` carries per-timestamp source/resolution provenance and the name/meta allocation split in one record.
-- **Self-describing locator + serde, credentials out-of-band.** A `PathSpec` carries its whole open-recipe and round-trips through a report, session, or evidence row, while credentials stay out of the serialized address (fixing dfVFS's global-keychain footgun without leaking keys into reports).
+- **Self-describing locator + serde, credentials out-of-band.** A `Locator` carries its whole open-recipe and round-trips through a report, session, or evidence row, while credentials stay out of the serialized address (fixing dfVFS's global-keychain footgun without leaking keys into reports).
 - **One detection engine for the whole fleet** (`4n6mount`, `issen`, `disk4n6` share one `Vfs`), replacing three parallel detect/dispatch implementations.
 
 ---
@@ -42,7 +42,7 @@ The contracts were hardened over two independent hostile-critic rounds. Recorded
 | 3 | `SeekAdapter(Mutex<R>)` serializes all workers on one lock. | **Accepted.** `FileSource` uses `pread` / `FileExt::read_at` (no lock); legacy readers use `SeekPoolSource` (cursor pool). |
 | 4 | Naive single-mutex LRU block cache = global IO throttle. | **Accepted.** Concurrent sharded / clock-sweep cache (moka-style). |
 | 5 | `FsMeta.runs: Vec<ByteRun>` eagerly loaded → OOM on fragmented files. | **Accepted.** Runs removed from `FsMeta`; `extents()` iterator on demand. |
-| 6 | Credentials in `PathSpec` + serde is a lose-lose (leak keys or lose them). | **Accepted.** Credentials removed from `PathSpec`; supplied via `CredentialSource` at resolve time. |
+| 6 | Credentials in `Locator` + serde is a lose-lose (leak keys or lose them). | **Accepted.** Credentials removed from `Locator`; supplied via `CredentialSource` at resolve time. |
 | 7 | `comparable` string cache key collides (path bytes contain the delimiter). | **Accepted.** Identity via derived `Hash / Eq` on the enum; human `Display` percent-encodes. |
 | 8 | `read_dir -> Vec` OOMs on WinSxS-scale dirs. | **Accepted.** `read_dir -> DirStream` streaming iterator. |
 | 9 | No full-disk-encryption layer (BitLocker / LUKS / FileVault). | **Accepted.** New `EncryptionLayer` between volume and FS. |

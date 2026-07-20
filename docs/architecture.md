@@ -59,7 +59,7 @@ Adapters bridge the existing world: `FileSource` (positioned OS reads, no
   `WinFileTime`), ADS/resource-fork stream info, and residency — without the eager
   run-list (runs come from `extents()` lazily).
 
-## PathSpec
+## Locator
 
 A recursive chain of `Layer` nodes. Identity is the structured enum, so raw path
 bytes containing a delimiter can never collide two specs. Two text forms: a
@@ -73,7 +73,7 @@ Three roles across three crates ([ADR 0007](decisions/0007-retire-standalone-eng
 
 | Crate | Role | Status |
 |---|---|---|
-| **`forensic-vfs`** | byte source (`ImageSource`), the five `*Open` traits, `Openers` dispatch table, `PathSpec`, `FsMeta`, `FsKind` | published (0.4) — this crate |
+| **`forensic-vfs`** | byte source (`ImageSource`), the five `*Open` traits, `Openers` dispatch table, `Locator`, `FsMeta`, `FsKind` | published (0.4) — this crate |
 | **`forensic-vfs-resolver`** | the `SourceOpen` orchestrator — `impl SourceOpen for Openers`, recursive graph descent, `walk`, `snapshot_view` | published (0.1) — this workspace |
 | **`forensic-vfs-engine`** | `default_openers()` wiring the ~17 concrete readers + `Vfs::open(path)` host bootstrap + concurrent block cache | a **separate published repo** |
 | `disk-forensic` / `disk4n6` | thin CLI over the engine | evolving |
