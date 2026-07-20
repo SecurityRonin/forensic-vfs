@@ -344,6 +344,15 @@ pub trait FileSystem: Send + Sync {
     fn sector_sizes(&self) -> SectorSizes;
     fn timestamp_zone(&self) -> TimeZonePolicy;
 
+    /// The filesystem's own volume label / name, decoded per the filesystem's defined
+    /// encoding (NTFS `$VOLUME_NAME` UTF-16LE, FAT/exFAT label, ext4 `s_volume_name`,
+    /// APFS volume name), or `None` when the volume is unlabeled or the reader does not
+    /// extract it. This is the *filesystem* label (e.g. "System Reserved"), distinct
+    /// from a partition-table name (`VolumeDesc.label`).
+    fn volume_label(&self) -> Option<String> {
+        None
+    }
+
     /// Stream the children of a directory (owned, `Send`).
     fn read_dir(&self, ino: FileId) -> VfsResult<DirStream>;
     /// Stream the runs of one data stream of a node (owned, `Send`).

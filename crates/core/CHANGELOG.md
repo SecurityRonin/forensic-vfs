@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-20
+
+### Added
+
+- `FileSystem::volume_label()` — the defaulted filesystem-label accessor (readers
+  implement per-fs: NTFS `$VOLUME_NAME`, FAT/exFAT label, ext4 `s_volume_name`,
+  APFS volume name; the leaf's contribution is the `None` default). Additive — every
+  existing reader impl keeps compiling on the default.
+
 ## [0.6.1] - 2026-07-20
 
 ### Documentation

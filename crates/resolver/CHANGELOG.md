@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-20
+
+### Changed
+
+- Widen the `forensic-vfs` requirement to `0.7` (carries `FileSystem::volume_label()`).
+
 ## [0.2.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-resolver-v0.1.4...forensic-vfs-resolver-v0.2.0) - 2026-07-19
 
 ### Added
