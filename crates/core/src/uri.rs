@@ -718,6 +718,52 @@ mod tests {
     }
 
     #[test]
+    fn to_uri_emits_new_scheme_and_file_token() {
+        // Encode emits ONLY the new forms: scheme `loc:` and base token `file:`.
+        let spec = PathSpec::os("/evidence/DC01.E01").push(Layer::Container {
+            format: ContainerFormat::Ewf,
+        });
+        let uri = spec.to_uri();
+        assert!(uri.starts_with("loc:"), "expected loc: scheme, got {uri}");
+        assert!(
+            uri.contains("file:"),
+            "expected file: base token, got {uri}"
+        );
+        assert!(!uri.contains("fvfs:"), "legacy scheme leaked: {uri}");
+        assert!(!uri.contains("os:"), "legacy os: token leaked: {uri}");
+    }
+
+    #[test]
+    fn legacy_fvfs_os_uri_decodes_same_as_new_form() {
+        // Decode accepts BOTH the new (loc:/file:) and legacy (fvfs:/os:) forms; a
+        // persisted legacy locator parses to the same value as the new form.
+        let new = PathSpec::from_uri("loc:file:%2Fimg.raw").expect("new form parses");
+        let legacy = PathSpec::from_uri("fvfs:os:%2Fimg.raw").expect("legacy form parses");
+        assert_eq!(
+            new, legacy,
+            "legacy fvfs:/os: must decode identically to loc:/file:"
+        );
+        // And a legacy URI re-encodes ONLY in the new form (no data stranded).
+        let re = legacy.to_uri();
+        assert!(
+            re.starts_with("loc:") && re.contains("file:"),
+            "legacy must re-encode in new form: {re}"
+        );
+        assert!(
+            !re.contains("fvfs:") && !re.contains("os:"),
+            "re-encode must not emit legacy tokens: {re}"
+        );
+    }
+
+    #[test]
+    fn legacy_and_new_multi_layer_decode_equal() {
+        // A richer chain in both schemes decodes to the same spec.
+        let new = PathSpec::from_uri("loc:file:%2Fx|container:ewf").expect("new");
+        let legacy = PathSpec::from_uri("fvfs:os:%2Fx|container:ewf").expect("legacy");
+        assert_eq!(new, legacy);
+    }
+
+    #[test]
     fn human_display_is_readable_and_not_the_uri() {
         let spec = PathSpec::os("/evidence/DC01.E01")
             .push(Layer::Container {
