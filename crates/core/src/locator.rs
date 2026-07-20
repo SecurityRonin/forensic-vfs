@@ -1,12 +1,12 @@
-//! [`PathSpec`] — the recursive, self-describing locator.
+//! [`Locator`] — the recursive, self-describing access-route locator.
 //!
 //! A chain of [`Layer`] nodes, each naming one layer, its location within that
 //! layer, and its parent. It is the cache key, the reproducibility record, and
 //! what a report cites. It carries **no credentials** — an address, not a
 //! keychain. Identity is the structured enum (derived `Hash`/`Eq`), never a
 //! stringification, so raw path bytes containing a delimiter cannot collide two
-//! specs. Two text forms exist (see [`crate::uri`]): a lossless canonical URI and
-//! a lossy human `Display`.
+//! locators. Two text forms exist (see [`crate::uri`]): a lossless canonical URI
+//! and a lossy human `Display`.
 
 use std::path::PathBuf;
 
@@ -45,8 +45,9 @@ pub enum NodeAddr {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Layer {
-    /// The base OS path — the only parentless layer.
-    Os { path: PathBuf },
+    /// The base file path — the only parentless layer (a real file: local disk,
+    /// USB, network share, FUSE mount).
+    File { path: PathBuf },
     /// A byte window of the parent.
     Range { start: u64, len: u64 },
     /// Decode a container (Auto = sniffed).
@@ -71,27 +72,35 @@ pub enum Layer {
     Archive { member: Option<usize> },
 }
 
-/// The recursive locator. Constructed via [`PathSpec::os`] + [`PathSpec::push`],
+/// The recursive locator. Constructed via [`Locator::file`] + [`Locator::push`],
 /// so a new `Layer` variant is an additive change and callers never build the
 /// chain by hand-nesting `Box`es.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PathSpec {
+pub struct Locator {
     pub layer: Layer,
-    pub parent: Option<Box<PathSpec>>,
+    pub parent: Option<Box<Locator>>,
 }
 
-impl PathSpec {
-    /// A base spec rooted at an OS path.
+impl Locator {
+    /// A base locator rooted at a real file path (local disk, USB, network
+    /// share, FUSE mount — medium-agnostic).
     #[must_use]
-    pub fn os(path: impl Into<PathBuf>) -> Self {
+    pub fn file(path: impl Into<PathBuf>) -> Self {
         Self {
-            layer: Layer::Os { path: path.into() },
+            layer: Layer::File { path: path.into() },
             parent: None,
         }
     }
 
-    /// A raw base spec for any layer (no parent). Prefer [`PathSpec::os`] for the
-    /// root; this exists for tests and re-parenting.
+    /// Deprecated alias for [`Locator::file`] (renamed in forensic-vfs 0.6).
+    #[deprecated(note = "renamed to file()")]
+    #[must_use]
+    pub fn os(path: impl Into<PathBuf>) -> Self {
+        Self::file(path)
+    }
+
+    /// A raw base locator for any layer (no parent). Prefer [`Locator::file`] for
+    /// the root; this exists for tests and re-parenting.
     #[must_use]
     pub fn root(layer: Layer) -> Self {
         Self {
@@ -115,9 +124,9 @@ impl PathSpec {
         1 + self.parent.as_ref().map_or(0, |p| p.depth())
     }
 
-    /// The root (parentless) spec of this chain.
+    /// The root (parentless) locator of this chain.
     #[must_use]
-    pub fn base(&self) -> &PathSpec {
+    pub fn base(&self) -> &Locator {
         match &self.parent {
             Some(p) => p.base(),
             None => self,

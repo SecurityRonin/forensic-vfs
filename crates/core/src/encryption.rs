@@ -4,7 +4,7 @@
 //! BitLocker/LUKS/FileVault sit between a volume and its filesystem; the resolver
 //! (in the engine) probes for them by on-disk header magic. Credentials are
 //! supplied at resolve time through an injected [`CredentialSource`], never stored
-//! in a [`crate::pathspec::PathSpec`], so a serialized address never leaks keys.
+//! in a [`crate::locator::Locator`], so a serialized address never leaks keys.
 
 use crate::error::VfsResult;
 use crate::source::DynSource;
@@ -36,7 +36,7 @@ pub enum Credential {
 }
 
 /// Supplies credentials at resolve time. Injected into the resolve call, kept out
-/// of the serialized address, so a `PathSpec` is safe to persist and re-open
+/// of the serialized address, so a `Locator` is safe to persist and re-open
 /// (the caller re-supplies credentials on re-open).
 pub trait CredentialSource: Send + Sync {
     /// Offer credentials for a target (a volume GUID / label / scheme name). An

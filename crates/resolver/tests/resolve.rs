@@ -12,7 +12,7 @@ use forensic_vfs::{
     Allocation, ArchiveContents, ArchiveOpen, Confidence, ContainerFormat, ContainerOpen,
     CredentialSource, DirEntry, DirStream, DynFs, DynSource, EncryptionLayer, EncryptionOpen,
     EncryptionScheme, FileId, FileSystem, FileSystemOpen, FsKind, FsMeta, ImageSource, Layer,
-    MacbTimes, Member, NoCredentials, NodeAddr, NodeKind, Openers, PathSpec, ResidencyKind,
+    Locator, MacbTimes, Member, NoCredentials, NodeAddr, NodeKind, Openers, ResidencyKind,
     SectorSizes, SnapshotRef, SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc,
     VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemOpen,
 };
@@ -397,7 +397,7 @@ fn resolves_a_filesystem_at_the_top_layer() {
     });
     let mut data = b"FSFS".to_vec();
     data.resize(8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -421,7 +421,7 @@ fn a_matching_probe_whose_open_fails_propagates_loud() {
     });
     let mut data = b"FSFS".to_vec();
     data.resize(8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -444,7 +444,7 @@ fn descends_a_volume_system_into_its_filesystem() {
     data.resize(512, 0);
     data.extend_from_slice(b"FSFS");
     data.resize(8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -473,7 +473,7 @@ fn descends_a_container_into_its_filesystem() {
     data.resize(1024, 0);
     data.extend_from_slice(b"FSFS");
     data.resize(8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -504,7 +504,7 @@ fn a_tail_probed_container_matches_a_trailer_magic() {
     data.extend_from_slice(b"FSFS"); // fs magic at the decoded payload's start
     data.resize(8188, 0);
     data.extend_from_slice(b"KOLY"); // container trailer at the tail
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -521,7 +521,7 @@ fn unrecognized_source_resolves_to_none() {
         magic: b"FSFS",
         fail: false,
     });
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: 4096,
     });
@@ -541,7 +541,7 @@ fn a_volume_system_whose_volumes_hold_no_fs_falls_through_to_none() {
         });
     let mut data = b"VOLS".to_vec();
     data.resize(4096, 0); // the partition window is all zeros -> no fs
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -562,7 +562,7 @@ fn a_container_whose_payload_holds_no_fs_falls_through_to_none() {
         });
     let mut data = b"CONT".to_vec();
     data.resize(4096, 0); // payload after offset 16 is all zeros -> no fs
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -587,7 +587,7 @@ fn descends_an_archive_stream_into_its_filesystem() {
     data.resize(16, 0);
     data.extend_from_slice(b"FSFS"); // fs magic at the decoded stream's start
     data.resize(16 + 8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -625,7 +625,7 @@ fn descends_an_archive_member_into_its_filesystem() {
     data.resize(16, 0);
     data.extend_from_slice(b"FSFS");
     data.resize(16 + 8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -657,7 +657,7 @@ fn an_archive_stream_holding_no_fs_falls_through_to_none() {
         });
     let mut data = b"GZIP".to_vec();
     data.resize(4096, 0); // decoded stream is all zeros -> no fs
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -678,7 +678,7 @@ fn an_archive_member_holding_no_fs_falls_through_to_none() {
         });
     let mut data = b"ZIPM".to_vec();
     data.resize(4096, 0); // the member is all zeros -> no fs
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -693,7 +693,7 @@ fn resolve_to_source_returns_a_bare_source_as_its_own_terminal() {
     // terminal: resolve_to_source hands it straight back, unwrapped.
     let reg = Openers::new();
     let data = b"RAWDUMP0".to_vec();
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -722,7 +722,7 @@ fn resolve_to_source_returns_the_innermost_stream_peel_not_none() {
     data.resize(16, 0);
     data.extend_from_slice(b"RAWDUMP0"); // inner payload marker at the peel's start
     data.resize(16 + 256, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -767,7 +767,7 @@ fn resolve_to_source_returns_a_single_member_source() {
     data.resize(16, 0);
     data.extend_from_slice(b"RAWDUMP0");
     data.resize(16 + 256, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -814,7 +814,7 @@ fn resolve_to_source_peels_a_container_then_archive_nesting() {
     data.resize(48, 0);
     data.extend_from_slice(b"RAWDUMP0"); // raw marker at the archive stream start
     data.resize(544, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -845,7 +845,7 @@ fn resolve_to_source_is_depth_capped() {
     // Past the bomb-guard depth cap, resolve_to_source yields None rather than
     // recursing without bound — symmetric with the disk `open()` terminal.
     let reg = Openers::new();
-    let base = PathSpec::root(Layer::Range { start: 0, len: 16 });
+    let base = Locator::root(Layer::Range { start: 0, len: 16 });
     assert!(reg
         .resolve_to_source(mem(vec![0u8; 16]), base, 100)
         .unwrap()
@@ -874,7 +874,7 @@ fn descends_a_signature_encryption_layer_into_its_filesystem() {
     data.resize(512, 0);
     data.extend_from_slice(b"FSFS"); // fs magic at the decrypted volume's start
     data.resize(512 + 8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -915,7 +915,7 @@ fn a_signature_encryption_whose_decrypt_fails_propagates_loud() {
         });
     let mut data = b"LUKS".to_vec();
     data.resize(8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -943,7 +943,7 @@ fn a_credential_attempt_scheme_never_shadows_a_real_filesystem() {
         });
     let mut data = b"FSFS".to_vec();
     data.resize(8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -985,7 +985,7 @@ fn a_credential_attempt_scheme_descends_as_a_last_resort() {
     let mut data = vec![0u8; 512];
     data.extend_from_slice(b"FSFS");
     data.resize(512 + 8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -1026,7 +1026,7 @@ fn a_credential_attempt_whose_decrypt_fails_falls_through_to_none() {
             inner: None, // decrypt fails
             attempts: Arc::new(Mutex::new(0)),
         });
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: 4096,
     });
@@ -1051,7 +1051,7 @@ fn a_signature_scheme_that_does_not_match_yields_a_no_verdict() {
             inner: Some((0, 4096)),
             attempts: Arc::new(Mutex::new(0)),
         });
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: 4096,
     });
@@ -1080,7 +1080,7 @@ fn a_signature_scheme_whose_plaintext_holds_no_fs_falls_through_to_none() {
         });
     let mut data = b"BDE!".to_vec();
     data.resize(512 + 4096, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -1106,7 +1106,7 @@ fn a_credential_attempt_whose_plaintext_holds_no_fs_falls_through_to_none() {
             inner: Some((0, 4096)), // decrypted window is all zeros -> no fs
             attempts: attempts.clone(),
         });
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: 4096,
     });
@@ -1141,7 +1141,7 @@ fn plain_open_delegates_through_no_credentials_and_still_descends_encryption() {
     data.resize(16, 0);
     data.extend_from_slice(b"FSFS");
     data.resize(16 + 8192, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -1172,7 +1172,7 @@ fn recursion_is_depth_capped_on_a_self_referential_container() {
     });
     let mut data = b"LOOP".to_vec();
     data.resize(4096, 0);
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });
@@ -1186,7 +1186,7 @@ fn an_empty_source_reads_a_single_byte_window_and_resolves_to_none() {
         magic: b"FSFS",
         fail: false,
     });
-    let base = PathSpec::root(Layer::Range { start: 0, len: 0 });
+    let base = Locator::root(Layer::Range { start: 0, len: 0 });
     assert!(reg.open(mem(Vec::new()), base, 0).unwrap().is_none());
 }
 
@@ -1468,11 +1468,11 @@ fn walk_is_depth_capped() {
 #[test]
 fn evidence_carries_a_root_locator_and_optional_fs() {
     let ev = Evidence {
-        root: PathSpec::os("/img.raw"),
+        root: Locator::file("/img.raw"),
         fs: None,
     };
     assert!(ev.fs.is_none());
-    assert_eq!(ev.root, PathSpec::os("/img.raw"));
+    assert_eq!(ev.root, Locator::file("/img.raw"));
 }
 
 #[test]
@@ -1493,7 +1493,7 @@ fn epoch_from_create_time_round_trips_and_orders() {
 
 #[test]
 fn snapshot_view_carries_epoch_and_snapshot_locator() {
-    let base = PathSpec::os("/ev.dmg");
+    let base = Locator::file("/ev.dmg");
     let v = snapshot_view(&base, 42, "daily".to_string(), 1000);
     assert_eq!(v.xid, 42);
     assert_eq!(v.name, "daily");
@@ -1534,7 +1534,7 @@ fn resolve_keeps_the_base_source_shared_across_layers() {
         inner: mem(data.clone()),
         seen: seen.clone(),
     });
-    let base = PathSpec::root(Layer::Range {
+    let base = Locator::root(Layer::Range {
         start: 0,
         len: data.len() as u64,
     });

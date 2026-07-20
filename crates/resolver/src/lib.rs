@@ -5,7 +5,7 @@
 //!
 //! This is the reader-independent core of detection — it touches only the
 //! [`forensic_vfs::Openers`] prober traits and the layered
-//! [`PathSpec`]/[`Layer`] model, never a concrete reader. It is deliberately
+//! [`Locator`]/[`Layer`] model, never a concrete reader. It is deliberately
 //! split out of the [`forensic-vfs`](https://docs.rs/forensic-vfs) contract leaf
 //! so the *evolving detection behavior* (this crate) is firewalled from the
 //! *frozen contract* the fleet's reader crates pin.
@@ -29,7 +29,7 @@ use state_history_forensic::epoch::EpochTag;
 
 use forensic_vfs::{
     ArchiveContents, Confidence, CredentialSource, DynSource, FileId, FileSystem, FsMeta, Layer,
-    NoCredentials, NodeAddr, NodeKind, Openers, PathSpec, SnapshotRef, SniffWindow, VfsResult,
+    Locator, NoCredentials, NodeAddr, NodeKind, Openers, SnapshotRef, SniffWindow, VfsResult,
 };
 
 /// Depth cap on the recursive resolve (container/volume nesting) — a bomb guard.
@@ -52,7 +52,7 @@ const WALK_MAX_DEPTH: usize = 256;
 /// the resolver detected one (`None` for a source no registered prober recognized).
 pub struct Evidence {
     /// The locator this evidence was opened from.
-    pub root: PathSpec,
+    pub root: Locator,
     /// The mounted read-only filesystem, if detected.
     pub fs: Option<forensic_vfs::DynFs>,
 }
@@ -64,11 +64,11 @@ pub struct Resolved {
     /// The mounted read-only filesystem.
     pub fs: forensic_vfs::DynFs,
     /// The full locator, topped by the `fs:` layer.
-    pub spec: PathSpec,
+    pub spec: Locator,
     /// The byte source the filesystem was mounted from.
     pub source: DynSource,
     /// That source's pre-filesystem locator (the base a snapshot layer sits on).
-    pub source_spec: PathSpec,
+    pub source_spec: Locator,
 }
 
 /// One fully-peeled raw byte edge: the innermost [`DynSource`] no further
@@ -81,7 +81,7 @@ pub struct ResolvedSource {
     /// The fully-unwrapped raw byte edge.
     pub source: DynSource,
     /// Its locator, topped by the last packaging layer it was peeled through.
-    pub spec: PathSpec,
+    pub spec: Locator,
 }
 
 /// The generic layer resolver, exposed as an extension trait on the leaf's
@@ -97,7 +97,7 @@ pub trait SourceOpen {
     /// # Errors
     /// Propagates a source read error, or a prober `open`/decode failure raised
     /// after a positive probe verdict.
-    fn open(&self, source: DynSource, spec: PathSpec, depth: usize) -> VfsResult<Option<Resolved>> {
+    fn open(&self, source: DynSource, spec: Locator, depth: usize) -> VfsResult<Option<Resolved>> {
         self.open_with_credentials(source, spec, depth, &NoCredentials)
     }
 
@@ -127,7 +127,7 @@ pub trait SourceOpen {
     fn open_with_credentials(
         &self,
         source: DynSource,
-        spec: PathSpec,
+        spec: Locator,
         depth: usize,
         creds: &dyn CredentialSource,
     ) -> VfsResult<Option<Resolved>>;
@@ -166,7 +166,7 @@ pub trait SourceOpen {
     fn resolve_to_source(
         &self,
         source: DynSource,
-        spec: PathSpec,
+        spec: Locator,
         depth: usize,
     ) -> VfsResult<Option<ResolvedSource>>;
 }
@@ -175,7 +175,7 @@ impl SourceOpen for Openers {
     fn open_with_credentials(
         &self,
         source: DynSource,
-        spec: PathSpec,
+        spec: Locator,
         depth: usize,
         creds: &dyn CredentialSource,
     ) -> VfsResult<Option<Resolved>> {
@@ -261,7 +261,7 @@ impl SourceOpen for Openers {
     fn resolve_to_source(
         &self,
         source: DynSource,
-        spec: PathSpec,
+        spec: Locator,
         depth: usize,
     ) -> VfsResult<Option<ResolvedSource>> {
         if depth > MAX_DEPTH {
@@ -306,9 +306,9 @@ fn descend_packaging<T>(
     openers: &Openers,
     window: &SniffWindow,
     source: &DynSource,
-    spec: &PathSpec,
+    spec: &Locator,
     depth: usize,
-    recurse: &mut dyn FnMut(DynSource, PathSpec, usize) -> VfsResult<Option<T>>,
+    recurse: &mut dyn FnMut(DynSource, Locator, usize) -> VfsResult<Option<T>>,
 ) -> VfsResult<Option<T>> {
     for cd in openers.containers() {
         if cd.probe(window).is_candidate() {
@@ -383,7 +383,7 @@ fn descend_signature_encryption(
     openers: &Openers,
     window: &SniffWindow,
     source: &DynSource,
-    spec: &PathSpec,
+    spec: &Locator,
     depth: usize,
     creds: &dyn CredentialSource,
     credential_attempt: &mut Vec<usize>,
@@ -420,7 +420,7 @@ fn descend_signature_encryption(
 fn descend_credential_attempt_encryption(
     openers: &Openers,
     source: &DynSource,
-    spec: &PathSpec,
+    spec: &Locator,
     depth: usize,
     creds: &dyn CredentialSource,
     credential_attempt: &[usize],
@@ -445,7 +445,7 @@ fn descend_credential_attempt_encryption(
 
 /// One snapshot of a filesystem, viewed as a time-indexed state in the `[H]`
 /// cohort: the wall-clock [`EpochTag`], the transaction id, the snapshot name,
-/// and a re-openable [`PathSpec`] locator (base ⇒ `Snapshot{ApfsXid}`).
+/// and a re-openable [`Locator`] locator (base ⇒ `Snapshot{ApfsXid}`).
 #[derive(Debug, Clone)]
 pub struct SnapshotView {
     /// Time-indexed identity, derived from the snapshot's `create_time`.
@@ -455,7 +455,7 @@ pub struct SnapshotView {
     /// The snapshot name.
     pub name: String,
     /// A locator that the orchestration layer re-opens end-to-end.
-    pub locator: PathSpec,
+    pub locator: Locator,
 }
 
 /// Build a [`SnapshotView`] under `source_spec` (the source's pre-filesystem
@@ -464,7 +464,7 @@ pub struct SnapshotView {
 /// the mapping is unit-testable directly.
 #[must_use]
 pub fn snapshot_view(
-    source_spec: &PathSpec,
+    source_spec: &Locator,
     xid: u64,
     name: String,
     create_time: u64,

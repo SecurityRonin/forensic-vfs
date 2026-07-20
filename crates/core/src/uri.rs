@@ -1,10 +1,10 @@
-//! The lossless canonical URI form of a [`crate::PathSpec`] and its parser.
+//! The lossless canonical URI form of a [`crate::Locator`] and its parser.
 //!
-//! `PathSpec` to `String` to `PathSpec` is byte-for-byte lossless (every reserved
+//! `Locator` to `String` to `Locator` is byte-for-byte lossless (every reserved
 //! byte, including `/` and `%`, is percent-encoded), so a spec pasted from a
 //! report re-opens exactly. Round-trip is a test-enforced invariant.
 //!
-//! Grammar: `fvfs:` then layers joined by `|`. Each layer is `tag:body`; every
+//! Grammar: `loc:` then layers joined by `|`. Each layer is `tag:body`; every
 //! value byte outside the unreserved set `[A-Za-z0-9._-]` is `%HH`, so the
 //! structural delimiters `| : , /` only ever appear as structure.
 
@@ -15,16 +15,18 @@ use std::path::{Path, PathBuf};
 use crate::encryption::EncryptionScheme;
 use crate::error::{SmallHex, VfsError, VfsResult};
 use crate::fs::{FileId, FsKind, StreamId};
-use crate::pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
+use crate::locator::{Guid, Layer, Locator, NodeAddr, SnapshotRef};
 use crate::registry::ContainerFormat;
 use crate::volume::VolumeScheme;
 
-const SCHEME: &str = "fvfs:";
+const SCHEME: &str = "loc:";
+/// Legacy scheme accepted on decode for one release (ADR 0013); never emitted.
+const LEGACY_SCHEME: &str = "fvfs:";
 const LAYER_SEP: char = '|';
 
 fn err(detail: &str, ctx: &str) -> VfsError {
     VfsError::Decode {
-        layer: "pathspec-uri",
+        layer: "locator-uri",
         offset: 0,
         detail: detail.to_string(),
         bytes: SmallHex::new(ctx.as_bytes()),
@@ -321,7 +323,7 @@ fn parse_node_addr(t: &str, ctx: &str) -> VfsResult<NodeAddr> {
 
 fn layer_encode(l: &Layer) -> String {
     match l {
-        Layer::Os { path } => format!("os:{}", pct_encode(&path_to_bytes(path))),
+        Layer::File { path } => format!("file:{}", pct_encode(&path_to_bytes(path))),
         Layer::Range { start, len } => format!("range:{start},{len}"),
         Layer::Container { format } => format!("container:{}", container_token(*format)),
         Layer::Volume {
@@ -355,7 +357,8 @@ fn layer_parse(s: &str) -> VfsResult<Layer> {
         .split_once(':')
         .ok_or_else(|| err("layer missing tag", s))?;
     match tag {
-        "os" => Ok(Layer::Os {
+        // `os:` is the legacy token (ADR 0012), accepted on decode for one release.
+        "file" | "os" => Ok(Layer::File {
             path: bytes_to_path(&pct_decode(body)?),
         }),
         "range" => {
@@ -421,9 +424,9 @@ fn layer_parse(s: &str) -> VfsResult<Layer> {
     }
 }
 
-impl PathSpec {
+impl Locator {
     /// The lossless canonical URI form — round-trips byte-for-byte through
-    /// [`PathSpec::from_uri`].
+    /// [`Locator::from_uri`].
     #[must_use]
     pub fn to_uri(&self) -> String {
         let mut s = String::from(SCHEME);
@@ -437,15 +440,18 @@ impl PathSpec {
         s
     }
 
-    /// Parse a canonical URI produced by [`PathSpec::to_uri`]. Loud on any
+    /// Parse a canonical URI produced by [`Locator::to_uri`]. Loud on any
     /// malformed input (carries the offending string).
-    pub fn from_uri(s: &str) -> VfsResult<PathSpec> {
+    pub fn from_uri(s: &str) -> VfsResult<Locator> {
+        // Decode accepts the new `loc:` scheme and the legacy `fvfs:` alias (ADR
+        // 0013), so a persisted locator still parses; encode emits only `loc:`.
         let rest = s
             .strip_prefix(SCHEME)
-            .ok_or_else(|| err("missing fvfs: scheme", s))?;
+            .or_else(|| s.strip_prefix(LEGACY_SCHEME))
+            .ok_or_else(|| err("missing loc: scheme", s))?;
         let mut layers = rest.split(LAYER_SEP);
         let first = layers.next().ok_or_else(|| err("empty spec", s))?;
-        let mut spec = PathSpec::root(layer_parse(first)?);
+        let mut spec = Locator::root(layer_parse(first)?);
         for l in layers {
             spec = spec.push(layer_parse(l)?);
         }
@@ -454,8 +460,8 @@ impl PathSpec {
 }
 
 /// Lossy, human-readable form — readable, explicitly non-parseable (use
-/// [`PathSpec::to_uri`] for a form that round-trips).
-impl fmt::Display for PathSpec {
+/// [`Locator::to_uri`] for a form that round-trips).
+impl fmt::Display for Locator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let comps = |cs: &[Vec<u8>]| {
             cs.iter()
@@ -470,7 +476,7 @@ impl fmt::Display for PathSpec {
             }
             first = false;
             match l {
-                Layer::Os { path } => write!(f, "os:{}", path.display())?,
+                Layer::File { path } => write!(f, "file:{}", path.display())?,
                 Layer::Range { start, len } => write!(f, "range[{start}+{len}]")?,
                 Layer::Container { format } => write!(f, "{}", container_token(*format))?,
                 Layer::Volume { scheme, index, .. } => {
@@ -499,17 +505,17 @@ impl fmt::Display for PathSpec {
 }
 
 #[cfg(feature = "serde")]
-impl serde::Serialize for PathSpec {
+impl serde::Serialize for Locator {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&self.to_uri())
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for PathSpec {
+impl<'de> serde::Deserialize<'de> for Locator {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let uri = String::deserialize(d)?;
-        PathSpec::from_uri(&uri).map_err(serde::de::Error::custom)
+        Locator::from_uri(&uri).map_err(serde::de::Error::custom)
     }
 }
 
@@ -517,19 +523,19 @@ impl<'de> serde::Deserialize<'de> for PathSpec {
 mod tests {
     use crate::encryption::EncryptionScheme;
     use crate::fs::{FileId, FsKind, StreamId};
-    use crate::pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
+    use crate::locator::{Guid, Layer, Locator, NodeAddr, SnapshotRef};
     use crate::registry::ContainerFormat;
     use crate::volume::VolumeScheme;
 
-    fn roundtrip(spec: &PathSpec) {
+    fn roundtrip(spec: &Locator) {
         let uri = spec.to_uri();
-        let back = PathSpec::from_uri(&uri).expect("parse own output");
+        let back = Locator::from_uri(&uri).expect("parse own output");
         assert_eq!(&back, spec, "round-trip changed the spec; uri={uri}");
     }
 
     #[test]
     fn rich_chain_round_trips() {
-        let spec = PathSpec::os("/evidence/DC01.E01")
+        let spec = Locator::file("/evidence/DC01.E01")
             .push(Layer::Container {
                 format: ContainerFormat::Ewf,
             })
@@ -561,7 +567,7 @@ mod tests {
         // A component with the layer delimiter, the escape char, a slash, a
         // space, and a non-UTF-8 byte — all must survive.
         let nasty = b"a|b%c/d e\xff\x00z".to_vec();
-        let spec = PathSpec::os("/img.raw").push(Layer::Fs {
+        let spec = Locator::file("/img.raw").push(Layer::Fs {
             kind: FsKind::EXT,
             at: NodeAddr::Path(vec![nasty.clone(), b"plain".to_vec()]),
         });
@@ -573,17 +579,17 @@ mod tests {
 
     #[test]
     fn every_layer_kind_round_trips() {
-        roundtrip(&PathSpec::os("/x").push(Layer::Range {
+        roundtrip(&Locator::file("/x").push(Layer::Range {
             start: 512,
             len: 1_048_576,
         }));
-        roundtrip(&PathSpec::os("/x").push(Layer::Encryption {
+        roundtrip(&Locator::file("/x").push(Layer::Encryption {
             scheme: EncryptionScheme::Bitlocker,
         }));
-        roundtrip(&PathSpec::os("/x").push(Layer::Snapshot {
+        roundtrip(&Locator::file("/x").push(Layer::Snapshot {
             store: SnapshotRef::VssStore(4),
         }));
-        roundtrip(&PathSpec::os("/x").push(Layer::Snapshot {
+        roundtrip(&Locator::file("/x").push(Layer::Snapshot {
             store: SnapshotRef::ApfsXid(9_000_000),
         }));
         // Every FileId variant.
@@ -598,13 +604,13 @@ mod tests {
             FileId::IsoExtent { block: 40 },
             FileId::Opaque(123),
         ] {
-            roundtrip(&PathSpec::os("/x").push(Layer::Fs {
+            roundtrip(&Locator::file("/x").push(Layer::Fs {
                 kind: FsKind::APFS,
                 at: NodeAddr::File(id),
             }));
         }
         // Both (id + observed path).
-        roundtrip(&PathSpec::os("/x").push(Layer::Fs {
+        roundtrip(&Locator::file("/x").push(Layer::Fs {
             kind: FsKind::NTFS,
             at: NodeAddr::Both {
                 path: vec![b"Users".to_vec(), b"beth".to_vec()],
@@ -619,7 +625,7 @@ mod tests {
             StreamId::Xattr(2),
             StreamId::Slack,
         ] {
-            roundtrip(&PathSpec::os("/x").push(Layer::Stream { id: s }));
+            roundtrip(&Locator::file("/x").push(Layer::Stream { id: s }));
         }
     }
 
@@ -627,15 +633,15 @@ mod tests {
     fn archive_layer_round_trips() {
         // `None` = a 1→1 stream peel (bare gz/bz2); `Some(i)` = the i-th member of
         // a multi-member archive. Both must survive the canonical URI byte-for-byte.
-        roundtrip(&PathSpec::os("/case.tgz").push(Layer::Archive { member: None }));
-        roundtrip(&PathSpec::os("/case.zip").push(Layer::Archive { member: Some(3) }));
-        roundtrip(&PathSpec::os("/case.zip").push(Layer::Archive { member: Some(0) }));
+        roundtrip(&Locator::file("/case.tgz").push(Layer::Archive { member: None }));
+        roundtrip(&Locator::file("/case.zip").push(Layer::Archive { member: Some(3) }));
+        roundtrip(&Locator::file("/case.zip").push(Layer::Archive { member: Some(0) }));
     }
 
     #[test]
     fn from_uri_rejects_malformed_archive_member() {
         // A non-numeric archive member index is a hard reject, never a panic.
-        assert!(PathSpec::from_uri("fvfs:archive:notanumber").is_err());
+        assert!(Locator::from_uri("fvfs:archive:notanumber").is_err());
     }
 
     #[test]
@@ -650,7 +656,7 @@ mod tests {
             EncryptionScheme::ApfsEncrypted,
             EncryptionScheme::VeraCrypt,
         ] {
-            roundtrip(&PathSpec::os("/x").push(Layer::Encryption { scheme }));
+            roundtrip(&Locator::file("/x").push(Layer::Encryption { scheme }));
         }
     }
 
@@ -658,12 +664,12 @@ mod tests {
     fn from_uri_rejects_unknown_encryption_scheme() {
         // An encryption token outside the known set is a hard reject (loud), never
         // a fallback or a panic.
-        assert!(PathSpec::from_uri("fvfs:encryption:rot13").is_err());
+        assert!(Locator::from_uri("fvfs:encryption:rot13").is_err());
     }
 
     #[test]
     fn empty_path_round_trips() {
-        roundtrip(&PathSpec::os("/x").push(Layer::Fs {
+        roundtrip(&Locator::file("/x").push(Layer::Fs {
             kind: FsKind::ISO9660,
             at: NodeAddr::Path(vec![]),
         }));
@@ -675,7 +681,7 @@ mod tests {
         // to_uri -> from_uri (the `as_str` / `parse_fs_kind` pair). Iterating
         // `known()` means a newly-registered kind is covered automatically.
         for &kind in FsKind::known() {
-            roundtrip(&PathSpec::os("/x").push(Layer::Fs {
+            roundtrip(&Locator::file("/x").push(Layer::Fs {
                 kind,
                 at: NodeAddr::Path(vec![b"a".to_vec()]),
             }));
@@ -686,21 +692,21 @@ mod tests {
     fn from_uri_rejects_unknown_fs_kind() {
         // A token outside `known()` must error, not collapse to a fallback: the
         // newtype has no `Other`, so an unrecognized fs token is a hard reject.
-        assert!(PathSpec::from_uri("fvfs:fs:zzz,path").is_err());
+        assert!(Locator::from_uri("fvfs:fs:zzz,path").is_err());
     }
 
     #[test]
     fn from_uri_rejects_garbage() {
-        assert!(PathSpec::from_uri("not-a-spec").is_err());
-        assert!(PathSpec::from_uri("fvfs:").is_err());
-        assert!(PathSpec::from_uri("fvfs:bogustag:x").is_err());
-        assert!(PathSpec::from_uri("fvfs:range:notanumber").is_err());
+        assert!(Locator::from_uri("not-a-spec").is_err());
+        assert!(Locator::from_uri("fvfs:").is_err());
+        assert!(Locator::from_uri("fvfs:bogustag:x").is_err());
+        assert!(Locator::from_uri("fvfs:range:notanumber").is_err());
     }
 
     #[cfg(feature = "serde")]
     #[test]
     fn serde_round_trips_as_the_canonical_uri() {
-        let spec = PathSpec::os("/evidence/DC01.E01")
+        let spec = Locator::file("/evidence/DC01.E01")
             .push(Layer::Container {
                 format: ContainerFormat::Ewf,
             })
@@ -711,16 +717,16 @@ mod tests {
         let json = serde_json::to_string(&spec).expect("serialize");
         // Serialized form IS the canonical URI, as a JSON string.
         assert_eq!(json, format!("\"{}\"", spec.to_uri()));
-        let back: PathSpec = serde_json::from_str(&json).expect("deserialize");
+        let back: Locator = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, spec);
         // A malformed URI string is a deserialization error, not a panic.
-        assert!(serde_json::from_str::<PathSpec>("\"not-a-spec\"").is_err());
+        assert!(serde_json::from_str::<Locator>("\"not-a-spec\"").is_err());
     }
 
     #[test]
     fn to_uri_emits_new_scheme_and_file_token() {
         // Encode emits ONLY the new forms: scheme `loc:` and base token `file:`.
-        let spec = PathSpec::os("/evidence/DC01.E01").push(Layer::Container {
+        let spec = Locator::file("/evidence/DC01.E01").push(Layer::Container {
             format: ContainerFormat::Ewf,
         });
         let uri = spec.to_uri();
@@ -737,8 +743,8 @@ mod tests {
     fn legacy_fvfs_os_uri_decodes_same_as_new_form() {
         // Decode accepts BOTH the new (loc:/file:) and legacy (fvfs:/os:) forms; a
         // persisted legacy locator parses to the same value as the new form.
-        let new = PathSpec::from_uri("loc:file:%2Fimg.raw").expect("new form parses");
-        let legacy = PathSpec::from_uri("fvfs:os:%2Fimg.raw").expect("legacy form parses");
+        let new = Locator::from_uri("loc:file:%2Fimg.raw").expect("new form parses");
+        let legacy = Locator::from_uri("fvfs:os:%2Fimg.raw").expect("legacy form parses");
         assert_eq!(
             new, legacy,
             "legacy fvfs:/os: must decode identically to loc:/file:"
@@ -758,14 +764,14 @@ mod tests {
     #[test]
     fn legacy_and_new_multi_layer_decode_equal() {
         // A richer chain in both schemes decodes to the same spec.
-        let new = PathSpec::from_uri("loc:file:%2Fx|container:ewf").expect("new");
-        let legacy = PathSpec::from_uri("fvfs:os:%2Fx|container:ewf").expect("legacy");
+        let new = Locator::from_uri("loc:file:%2Fx|container:ewf").expect("new");
+        let legacy = Locator::from_uri("fvfs:os:%2Fx|container:ewf").expect("legacy");
         assert_eq!(new, legacy);
     }
 
     #[test]
     fn human_display_is_readable_and_not_the_uri() {
-        let spec = PathSpec::os("/evidence/DC01.E01")
+        let spec = Locator::file("/evidence/DC01.E01")
             .push(Layer::Container {
                 format: ContainerFormat::Ewf,
             })

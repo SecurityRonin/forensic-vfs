@@ -8,7 +8,7 @@
 //! ## The layered model
 //!
 //! ```text
-//! PathSpec (recursive locator)
+//! Locator (recursive locator)
 //!    │ resolves (a per-node transform graph, in the engine)
 //!    ▼
 //! ImageSource  ── the universal edge: read-only positioned bytes ──────────┐
@@ -25,7 +25,7 @@
 //!   ImageSource>`), and read-only in the type system — a write is uncompilable.
 //! - **[`FileSystem`] reads are `&self`** over interior mutability, so one mounted
 //!   handle serves N workers; bulk enumerations are owned `Send` streams.
-//! - **[`PathSpec`] identity is the structured enum**, with a lossless canonical
+//! - **[`Locator`] identity is the structured enum**, with a lossless canonical
 //!   URI ([`uri`]) for reports and a lossy human `Display`.
 //! - **True leaf.** Base deps are `thiserror` (+ optional `serde`); the
 //!   [`forensicnomicon`](https://docs.rs/forensicnomicon) findings bridge and the
@@ -43,7 +43,7 @@ pub mod archive;
 pub mod encryption;
 pub mod error;
 pub mod fs;
-pub mod pathspec;
+pub mod locator;
 pub mod read;
 pub mod registry;
 pub mod source;
@@ -61,7 +61,11 @@ pub use fs::{
     RunAlloc, RunFlags, RunInfo, SectorSizes, StreamId, StreamInfo, StreamKind, TimeResolution,
     TimeSource, TimeStamp, TimeZonePolicy,
 };
-pub use pathspec::{Guid, Layer, NodeAddr, PathSpec, SnapshotRef};
+pub use locator::{Guid, Layer, Locator, NodeAddr, SnapshotRef};
+
+/// Deprecated alias for [`Locator`] (renamed in forensic-vfs 0.6).
+#[deprecated(note = "renamed to Locator (forensic-vfs 0.6)")]
+pub type PathSpec = Locator;
 pub use registry::{
     ArchiveOpen, Confidence, ContainerFormat, ContainerOpen, EncryptionOpen, FileSystemOpen,
     Openers, SniffWindow, VolumeSystemOpen,

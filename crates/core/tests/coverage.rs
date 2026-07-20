@@ -19,7 +19,7 @@ use forensic_vfs::registry::{
 use forensic_vfs::source::{DynSource, ImageSource, SourceId};
 use forensic_vfs::volume::VolumeScheme;
 use forensic_vfs::{ArchiveContents, Member};
-use forensic_vfs::{Layer, NodeAddr, PathSpec};
+use forensic_vfs::{Layer, Locator, NodeAddr};
 
 struct MemSource(Vec<u8>);
 impl ImageSource for MemSource {
@@ -40,8 +40,8 @@ impl ImageSource for MemSource {
     }
 }
 
-fn uri_round_trips(spec: &PathSpec) {
-    let back = PathSpec::from_uri(&spec.to_uri()).unwrap();
+fn uri_round_trips(spec: &Locator) {
+    let back = Locator::from_uri(&spec.to_uri()).unwrap();
     assert_eq!(&back, spec);
 }
 
@@ -49,7 +49,7 @@ fn uri_round_trips(spec: &PathSpec) {
 fn both_addr_with_empty_path_round_trips() {
     use forensic_vfs::fs::FileId;
     // A `Both` with no observed path components — the id-only branch.
-    uri_round_trips(&PathSpec::os("/x").push(Layer::Fs {
+    uri_round_trips(&Locator::file("/x").push(Layer::Fs {
         kind: FsKind::NTFS,
         at: NodeAddr::Both {
             path: vec![],
@@ -73,7 +73,7 @@ fn every_container_format_token_round_trips() {
         ContainerFormat::Raw,
         ContainerFormat::Auto,
     ] {
-        uri_round_trips(&PathSpec::os("/x").push(Layer::Container { format: f }));
+        uri_round_trips(&Locator::file("/x").push(Layer::Container { format: f }));
     }
 }
 
@@ -90,7 +90,7 @@ fn every_volume_scheme_token_round_trips() {
     .into_iter()
     .enumerate()
     {
-        uri_round_trips(&PathSpec::os("/x").push(Layer::Volume {
+        uri_round_trips(&Locator::file("/x").push(Layer::Volume {
             scheme: s,
             index: i,
             guid: None,
@@ -108,7 +108,7 @@ fn every_encryption_scheme_token_round_trips() {
         EncryptionScheme::ApfsEncrypted,
         EncryptionScheme::VeraCrypt,
     ] {
-        uri_round_trips(&PathSpec::os("/x").push(Layer::Encryption { scheme: s }));
+        uri_round_trips(&Locator::file("/x").push(Layer::Encryption { scheme: s }));
     }
 }
 
@@ -117,7 +117,7 @@ fn every_fs_kind_token_round_trips() {
     // Every registered kind of the string-backed newtype must survive the
     // fs-locator token round-trip (the `as_str` / `parse_fs_kind` pair).
     for &k in FsKind::known() {
-        uri_round_trips(&PathSpec::os("/x").push(Layer::Fs {
+        uri_round_trips(&Locator::file("/x").push(Layer::Fs {
             kind: k,
             at: NodeAddr::Path(vec![b"a".to_vec()]),
         }));
@@ -289,15 +289,15 @@ fn from_uri_rejects_every_malformed_layer() {
         "fvfs:os:x|stream:zzz",
         "fvfs:os:x|archive:notanumber", // archive member index must be numeric
     ] {
-        assert!(PathSpec::from_uri(bad).is_err(), "should reject: {bad}");
+        assert!(Locator::from_uri(bad).is_err(), "should reject: {bad}");
     }
 }
 
 #[test]
 fn display_renders_every_layer_kind() {
     use forensic_vfs::fs::{FileId, StreamId};
-    use forensic_vfs::pathspec::SnapshotRef;
-    let spec = PathSpec::os("/img.raw")
+    use forensic_vfs::locator::SnapshotRef;
+    let spec = Locator::file("/img.raw")
         .push(Layer::Range { start: 0, len: 512 })
         .push(Layer::Volume {
             scheme: VolumeScheme::Gpt,
@@ -331,10 +331,10 @@ fn display_renders_every_layer_kind() {
         assert!(human.contains(needle), "missing {needle} in {human}");
     }
     // The bare-stream (member: None) archive Display arm.
-    let stream = PathSpec::os("/x").push(Layer::Archive { member: None });
+    let stream = Locator::file("/x").push(Layer::Archive { member: None });
     assert!(format!("{stream}").contains("archive"));
     // The apfs snapshot Display arm.
-    let apfs = PathSpec::os("/x").push(Layer::Snapshot {
+    let apfs = Locator::file("/x").push(Layer::Snapshot {
         store: SnapshotRef::ApfsXid(77),
     });
     assert!(format!("{apfs}").contains("apfs@77"));

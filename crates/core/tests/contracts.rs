@@ -19,7 +19,7 @@ use forensic_vfs::source::{
     read_exact_at, DynSource, Extent, Extents, ImageSource, SourceId, SourceView,
 };
 use forensic_vfs::volume::{VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem};
-use forensic_vfs::{Layer, PathSpec};
+use forensic_vfs::{Layer, Locator};
 
 // --- doubles -------------------------------------------------------------
 
@@ -350,17 +350,17 @@ fn source_view_derefs_both_variants() {
 }
 
 #[test]
-fn pathspec_navigation() {
-    let spec = PathSpec::os("/img.raw")
+fn locator_navigation() {
+    let spec = Locator::file("/img.raw")
         .push(Layer::Range { start: 0, len: 512 })
         .push(Layer::Stream {
             id: StreamId::Default,
         });
     assert_eq!(spec.depth(), 3);
-    assert!(matches!(spec.base().layer, Layer::Os { .. }));
+    assert!(matches!(spec.base().layer, Layer::File { .. }));
     assert_eq!(spec.layers().len(), 3);
     // a raw root spec (not OS-rooted)
-    let r = PathSpec::root(Layer::Range { start: 8, len: 8 });
+    let r = Locator::root(Layer::Range { start: 8, len: 8 });
     assert_eq!(r.depth(), 1);
 }
 

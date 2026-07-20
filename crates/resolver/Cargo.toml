@@ -1,6 +1,6 @@
 [package]
 name         = "forensic-vfs-resolver"
-version      = "0.2.0"
+version      = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 description  = "The generic layer resolver over the forensic-vfs contracts: sniff a byte source, match a registered prober, and descend container/volume/filesystem layers until a filesystem mounts — the evolving detection behavior, firewalled from the frozen forensic-vfs contract leaf"
@@ -13,11 +13,11 @@ keywords      = ["forensics", "vfs", "disk-image", "filesystem", "dfir"]
 categories    = ["filesystem", "parser-implementations"]
 
 [dependencies]
-# The frozen contract leaf: the `Registry` prober traits, `PathSpec`/`Layer`
+# The frozen contract leaf: the `Registry` prober traits, `Locator`/`Layer`
 # model, and byte-source edge this resolver drives. Path within the workspace;
 # the `version` line lets `cargo publish` resolve the registry crate once 0.4 is
 # published. Requires 0.4.2 for `NoCredentials` (the encryption-descent default).
-forensic-vfs = { path = "../core", version = "0.5.0" }
+forensic-vfs = { path = "../core", version = "0.6.0" }
 # EpochTag for SnapshotView — zero-dep KNOWLEDGE-tier leaf.
 state-history-forensic = { workspace = true }
 
