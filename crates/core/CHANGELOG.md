@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-09
+
+### Fixed
+
+- Widen the `state-history-forensic` requirement from `"0.1"` to `"0.2"`. For a
+  0.x crate cargo treats the minor as the major, so `"0.1"` could not reach
+  0.2.x and no lock refresh would ever cross it. Because every `*-core`
+  filesystem crate depends on `forensic-vfs`, this requirement is what pinned
+  the whole graph to the 0.1 line — a consumer widening its own direct
+  requirement first resolves both versions side by side instead of converging.
+  0.2.0 was additive (it added the `[P]` persistent evidential address), and
+  the MSRV is unchanged: 0.2.1 requires 1.75, as does this crate.
+
+## [0.7.1] - 2026-08-05
+
+Backfilled. 0.7.1 published without a changelog entry, and it carried an MSRV
+change that consumers need to see.
+
+### Fixed
+
+- Declare the MSRV this crate actually has: **1.85 → 1.75**. The higher floor
+  was over-declared and propagated to every downstream consumer.
+- Regenerate `Cargo.lock` at v3, which the 1.75 floor requires — a v4 lockfile
+  fails to parse on older toolchains and reads as a language-level MSRV failure
+  when it is not one.
+- Supply-chain: trust our own crates rather than exempting them, and record vet
+  entries for the versions the v3 lockfile resolves.
+
 ## [0.7.0] - 2026-07-20
 
 ### Added
