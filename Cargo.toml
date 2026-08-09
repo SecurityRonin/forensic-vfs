@@ -26,7 +26,7 @@ forensicnomicon-core = "1.4"
 forensicnomicon = "1"
 # KNOWLEDGE [H] state-history vocabulary — `EpochTag`, carried by `SnapshotView`.
 # Zero-dep KNOWLEDGE-tier leaf, so a non-optional dep keeps the leaf/lean rule.
-state-history-forensic = "0.1"
+state-history-forensic = "0.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
