@@ -23,8 +23,8 @@ user-login = "h4x0r"
 user-name = "Albert Hui"
 
 [[publisher.state-history-forensic]]
-version = "0.1.1"
-when = "2026-08-05"
+version = "0.2.1"
+when = "2026-08-06"
 user-id = 347968
 user-login = "h4x0r"
 user-name = "Albert Hui"
