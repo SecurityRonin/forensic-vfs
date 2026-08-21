@@ -169,9 +169,54 @@ pub trait SourceOpen {
         spec: Locator,
         depth: usize,
     ) -> VfsResult<Option<ResolvedSource>>;
+
+    /// Mount evidence rooted at a **directory**, offering `creds`.
+    ///
+    /// The stream entry points above cannot reach a captured file tree: they
+    /// start from a `DynSource`, and a tree has none. This is the directory
+    /// terminal, symmetric with [`SourceOpen::open`]'s filesystem terminal.
+    ///
+    /// Each registered [`TreeOpen`] is probed in registration order and the
+    /// first candidate is opened. `Ok(None)` when nothing recognizes the
+    /// directory — a genuinely clean unknown, not an error, matching the
+    /// empty-source contract the stream path already keeps.
+    ///
+    /// # Errors
+    /// Propagates the opener's failure after a positive probe, including
+    /// [`VfsError::NeedCredentials`] when the tree is encrypted and `creds`
+    /// offered nothing usable. A recognized-but-locked tree is never downgraded
+    /// to `Ok(None)`, because reporting locked evidence as unrecognized is the
+    /// bootstrap-failure-as-empty-result defect.
+    fn open_tree(
+        &self,
+        root: &std::path::Path,
+        creds: &dyn CredentialSource,
+    ) -> VfsResult<Option<ResolvedTree>>;
+}
+
+/// One mounted directory-rooted tree: the filesystem and its locator.
+///
+/// Deliberately not a [`Resolved`], which carries the `DynSource` the filesystem
+/// was mounted from. A tree has no such source — that absence is the whole
+/// reason this seam exists — and inventing one to satisfy the struct would put
+/// the lie back into the type.
+pub struct ResolvedTree {
+    /// The mounted read-only filesystem.
+    pub fs: forensic_vfs::DynFs,
+    /// The locator, rooted at [`Layer::Directory`](forensic_vfs::Layer::Directory).
+    pub spec: Locator,
 }
 
 impl SourceOpen for Openers {
+    fn open_tree(
+        &self,
+        _root: &std::path::Path,
+        _creds: &dyn CredentialSource,
+    ) -> VfsResult<Option<ResolvedTree>> {
+        // RED: the contract is declared, the dispatch is not written yet.
+        Ok(None)
+    }
+
     fn open_with_credentials(
         &self,
         source: DynSource,

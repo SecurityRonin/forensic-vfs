@@ -324,6 +324,10 @@ fn parse_node_addr(t: &str, ctx: &str) -> VfsResult<NodeAddr> {
 fn layer_encode(l: &Layer) -> String {
     match l {
         Layer::File { path } => format!("file:{}", pct_encode(&path_to_bytes(path))),
+        // Distinct from `file:` so a round-trip cannot turn directory-rooted
+        // evidence into a stream to be sniffed. The two resolve down different
+        // paths and the address has to say which.
+        Layer::Directory { path } => format!("dir:{}", pct_encode(&path_to_bytes(path))),
         Layer::Range { start, len } => format!("range:{start},{len}"),
         Layer::Container { format } => format!("container:{}", container_token(*format)),
         Layer::Volume {
@@ -359,6 +363,9 @@ fn layer_parse(s: &str) -> VfsResult<Layer> {
     match tag {
         // `os:` is the legacy token (ADR 0012), accepted on decode for one release.
         "file" | "os" => Ok(Layer::File {
+            path: bytes_to_path(&pct_decode(body)?),
+        }),
+        "dir" => Ok(Layer::Directory {
             path: bytes_to_path(&pct_decode(body)?),
         }),
         "range" => {
@@ -477,6 +484,7 @@ impl fmt::Display for Locator {
             first = false;
             match l {
                 Layer::File { path } => write!(f, "file:{}", path.display())?,
+                Layer::Directory { path } => write!(f, "dir:{}", path.display())?,
                 Layer::Range { start, len } => write!(f, "range[{start}+{len}]")?,
                 Layer::Container { format } => write!(f, "{}", container_token(*format))?,
                 Layer::Volume { scheme, index, .. } => {

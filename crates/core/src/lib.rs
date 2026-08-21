@@ -68,7 +68,7 @@ pub use locator::{Guid, Layer, Locator, NodeAddr, SnapshotRef};
 pub type PathSpec = Locator;
 pub use registry::{
     ArchiveOpen, Confidence, ContainerFormat, ContainerOpen, EncryptionOpen, FileSystemOpen,
-    Openers, SniffWindow, VolumeSystemOpen,
+    Openers, SniffWindow, TreeOpen, VolumeSystemOpen,
 };
 pub use source::{read_exact_at, DynSource, Extent, Extents, ImageSource, SourceId, SourceView};
 pub use volume::{VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem};
