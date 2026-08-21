@@ -10,11 +10,11 @@ use std::sync::{Arc, Mutex};
 use forensic_vfs::adapters::SubRange;
 use forensic_vfs::{
     Allocation, ArchiveContents, ArchiveOpen, Confidence, ContainerFormat, ContainerOpen,
-    CredentialSource, DirEntry, DirStream, DynFs, DynSource, EncryptionLayer, EncryptionOpen,
-    EncryptionScheme, FileId, FileSystem, FileSystemOpen, FsKind, FsMeta, ImageSource, Layer,
-    Locator, MacbTimes, Member, NoCredentials, NodeAddr, NodeKind, Openers, ResidencyKind,
-    SectorSizes, SnapshotRef, SniffWindow, TimeZonePolicy, VfsError, VfsResult, VolumeDesc,
-    VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemOpen,
+    Credential, CredentialSource, DirEntry, DirStream, DynFs, DynSource, EncryptionLayer,
+    EncryptionOpen, EncryptionScheme, FileId, FileSystem, FileSystemOpen, FsKind, FsMeta,
+    ImageSource, Layer, Locator, MacbTimes, Member, NoCredentials, NodeAddr, NodeKind, Openers,
+    ResidencyKind, SectorSizes, SnapshotRef, SniffWindow, TimeZonePolicy, TreeOpen, VfsError,
+    VfsResult, VolumeDesc, VolumeKind, VolumeScheme, VolumeSystem, VolumeSystemOpen,
 };
 use forensic_vfs_resolver::{
     epoch_from_create_time, snapshot_view, walk, Evidence, ResolvedSource, SourceOpen,
@@ -1540,4 +1540,122 @@ fn resolve_keeps_the_base_source_shared_across_layers() {
     });
     assert!(reg.open(src, base, 0).unwrap().is_some());
     assert!(*seen.lock().unwrap() >= 1, "the base source was read");
+}
+
+// --- directory-rooted evidence (TreeOpen) --------------------------------
+
+/// A fake tree opener. It probes on the directory's own name rather than
+/// reading a marker file, so these stay hermetic: what is under test is
+/// dispatch and credential threading, not filesystem I/O.
+struct FakeTreeOpen {
+    claims: &'static str,
+    locked: bool,
+}
+
+impl TreeOpen for FakeTreeOpen {
+    fn name(&self) -> &'static str {
+        "faketree"
+    }
+
+    fn probe(&self, root: &std::path::Path) -> Confidence {
+        if root.file_name().and_then(|n| n.to_str()) == Some(self.claims) {
+            Confidence::Yes { how: "root name" }
+        } else {
+            Confidence::No
+        }
+    }
+
+    fn open(&self, _root: &std::path::Path, creds: &dyn CredentialSource) -> VfsResult<DynFs> {
+        if self.locked
+            && creds
+                .credentials_for(EncryptionScheme::FileVault, "faketree")
+                .is_empty()
+        {
+            return Err(VfsError::NeedCredentials {
+                scheme: "faketree",
+                target: "faketree".to_string(),
+            });
+        }
+        Ok(Arc::new(TreeFs {
+            tree: vec![(0, vec![(b"captured.txt".to_vec(), 1, NodeKind::File)])],
+        }))
+    }
+}
+
+fn tree_reg(locked: bool) -> Openers {
+    Openers::new().tree(FakeTreeOpen {
+        claims: "backup",
+        locked,
+    })
+}
+
+/// The seam's reason for existing: evidence that is a directory has no
+/// `DynSource`, so no stream entry point can reach it.
+#[test]
+fn a_registered_tree_opener_mounts_a_directory_it_claims() {
+    let root = std::path::Path::new("/evidence/backup");
+
+    let resolved = tree_reg(false)
+        .open_tree(root, &NoCredentials)
+        .expect("probe and open must not error")
+        .expect("the registered opener claims this directory");
+
+    assert_eq!(
+        resolved.spec.layer,
+        Layer::Directory {
+            path: root.to_path_buf()
+        },
+        "the locator roots at the directory, not at a file"
+    );
+    assert!(resolved.fs.read_dir(FileId::Opaque(0)).is_ok());
+}
+
+/// `Ok(None)` for a directory nobody claims — the clean-unknown contract the
+/// stream path already keeps, so an ordinary folder is not an error.
+#[test]
+fn an_unclaimed_directory_resolves_to_nothing_rather_than_failing() {
+    let root = std::path::Path::new("/evidence/holiday-photos");
+    assert!(tree_reg(false)
+        .open_tree(root, &NoCredentials)
+        .unwrap()
+        .is_none());
+}
+
+/// A locked tree surfaces `NeedCredentials`, never `Ok(None)`. Downgrading it
+/// would report locked evidence as unrecognized, which an examiner reads as
+/// "nothing here" rather than "supply the password" — the
+/// bootstrap-failure-as-empty-result defect.
+#[test]
+fn a_locked_tree_demands_credentials_instead_of_reporting_nothing() {
+    // `ResolvedTree` holds a `DynFs`, which is not `Debug`, so this matches on
+    // the result rather than reaching for `expect_err`.
+    match tree_reg(true).open_tree(std::path::Path::new("/evidence/backup"), &NoCredentials) {
+        Err(VfsError::NeedCredentials { .. }) => {}
+        Err(other) => panic!("expected NeedCredentials, got {other:?}"),
+        Ok(Some(_)) => panic!("a locked tree must not mount without a credential"),
+        Ok(None) => panic!(
+            "a recognized-but-locked tree reported as unrecognized -- an examiner \
+             reads that as 'nothing here' rather than 'supply the password'"
+        ),
+    }
+}
+
+/// Credentials reach the mount itself rather than a layer beneath it: a tree
+/// wraps each file under its own key, so there is no sector stream to translate.
+#[test]
+fn credentials_are_threaded_through_to_the_tree_opener() {
+    struct OnePassword;
+    impl CredentialSource for OnePassword {
+        fn credentials_for(&self, _s: EncryptionScheme, _t: &str) -> Vec<Credential> {
+            vec![Credential::Password("open sesame".to_string())]
+        }
+    }
+
+    assert!(
+        tree_reg(true)
+            .open_tree(std::path::Path::new("/evidence/backup"), &OnePassword)
+            .unwrap()
+            .is_some(),
+        "the same tree opens once a credential is offered"
+    );
 }

@@ -45,9 +45,15 @@ pub enum NodeAddr {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Layer {
-    /// The base file path — the only parentless layer (a real file: local disk,
+    /// The base file path — a parentless layer (a real file: local disk,
     /// USB, network share, FUSE mount).
     File { path: PathBuf },
+    /// A base directory root — the other parentless layer, for evidence that is
+    /// a captured file tree rather than a byte stream (an iOS backup, an
+    /// extracted logical acquisition). Addressed by path exactly like
+    /// [`Layer::File`]; the distinction is that nothing beneath it is a stream,
+    /// so no container/archive layer can sit between it and its `Fs`.
+    Directory { path: PathBuf },
     /// A byte window of the parent.
     Range { start: u64, len: u64 },
     /// Decode a container (Auto = sniffed).
@@ -88,6 +94,16 @@ impl Locator {
     pub fn file(path: impl Into<PathBuf>) -> Self {
         Self {
             layer: Layer::File { path: path.into() },
+            parent: None,
+        }
+    }
+
+    /// A base locator rooted at a directory of captured files, for evidence that
+    /// has no single byte stream (an iOS backup, an extracted logical set).
+    #[must_use]
+    pub fn directory(path: impl Into<PathBuf>) -> Self {
+        Self {
+            layer: Layer::Directory { path: path.into() },
             parent: None,
         }
     }

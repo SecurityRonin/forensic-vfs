@@ -183,6 +183,51 @@ pub trait ArchiveOpen: Send + Sync {
     fn open(&self, src: DynSource) -> VfsResult<ArchiveContents>;
 }
 
+/// Recognizes and mounts evidence rooted at a **directory** rather than a byte
+/// stream.
+///
+/// Every other opener above takes a [`DynSource`], which presumes the evidence
+/// is a stream to sniff. A captured file tree is not one. An iOS backup is a
+/// directory of individually-encrypted blobs indexed by a `SQLite` manifest; an
+/// extracted logical acquisition is a directory of files. Neither has a single
+/// byte source to probe, so neither could be reached through this abstraction at
+/// all — which left consumers no route except the per-format special case ADR
+/// 0011 exists to forbid.
+///
+/// Synthesising a fake stream to fit the existing traits was considered and
+/// rejected: it would put a decoder behind an interface that promises bytes and
+/// cannot deliver them, which is a hack wearing an abstraction's clothes.
+///
+/// [`TreeOpen::open`] receives the [`CredentialSource`](crate::encryption::CredentialSource)
+/// directly rather than having it threaded through an
+/// [`EncryptionLayer`] beneath it. A tree is
+/// not decrypted as a unit — an iOS backup wraps each file under its own
+/// protection-class key — so there is no sector stream to translate and the
+/// mount itself is what needs the credential.
+pub trait TreeOpen: Send + Sync {
+    /// What this opener is called, for the ambiguity report and diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// Probe a directory root, reading whatever index identifies the format.
+    ///
+    /// Implementations read named entries (a manifest, a header file); they must
+    /// not walk the tree, because a probe runs against every registered opener
+    /// and an acquisition can hold millions of files.
+    fn probe(&self, root: &std::path::Path) -> Confidence;
+
+    /// Mount the tree, offering `creds`.
+    ///
+    /// # Errors
+    /// [`VfsError::NeedCredentials`](crate::error::VfsError::NeedCredentials)
+    /// when the tree is encrypted and `creds` offered nothing usable — never a
+    /// silent empty mount, which would report locked evidence as absent.
+    fn open(
+        &self,
+        root: &std::path::Path,
+        creds: &dyn crate::encryption::CredentialSource,
+    ) -> VfsResult<DynFs>;
+}
+
 /// The compiled-in dispatch table. Populated by the engine's `default_openers()`;
 /// held here so any tool/test can build one without a circular dep through a
 /// binary crate.
@@ -193,6 +238,7 @@ pub struct Openers {
     encryption: Vec<Box<dyn EncryptionOpen>>,
     filesystems: Vec<Box<dyn FileSystemOpen>>,
     archives: Vec<Box<dyn ArchiveOpen>>,
+    trees: Vec<Box<dyn TreeOpen>>,
 }
 
 impl Openers {
@@ -237,6 +283,13 @@ impl Openers {
         self
     }
 
+    /// Register a directory-rooted prober (iOS backup, extracted logical set).
+    #[must_use]
+    pub fn tree(mut self, t: impl TreeOpen + 'static) -> Self {
+        self.trees.push(Box::new(t));
+        self
+    }
+
     /// The registered container decoders, in registration order.
     #[must_use]
     pub fn containers(&self) -> &[Box<dyn ContainerOpen>] {
@@ -261,5 +314,10 @@ impl Openers {
     #[must_use]
     pub fn archives(&self) -> &[Box<dyn ArchiveOpen>] {
         &self.archives
+    }
+    /// The registered directory-rooted probers.
+    #[must_use]
+    pub fn trees(&self) -> &[Box<dyn TreeOpen>] {
+        &self.trees
     }
 }
