@@ -176,14 +176,14 @@ pub trait SourceOpen {
     /// start from a `DynSource`, and a tree has none. This is the directory
     /// terminal, symmetric with [`SourceOpen::open`]'s filesystem terminal.
     ///
-    /// Each registered [`TreeOpen`] is probed in registration order and the
+    /// Each registered `TreeOpen` is probed in registration order and the
     /// first candidate is opened. `Ok(None)` when nothing recognizes the
     /// directory — a genuinely clean unknown, not an error, matching the
     /// empty-source contract the stream path already keeps.
     ///
     /// # Errors
     /// Propagates the opener's failure after a positive probe, including
-    /// [`VfsError::NeedCredentials`] when the tree is encrypted and `creds`
+    /// `VfsError::NeedCredentials` when the tree is encrypted and `creds`
     /// offered nothing usable. A recognized-but-locked tree is never downgraded
     /// to `Ok(None)`, because reporting locked evidence as unrecognized is the
     /// bootstrap-failure-as-empty-result defect.
@@ -203,7 +203,7 @@ pub trait SourceOpen {
 pub struct ResolvedTree {
     /// The mounted read-only filesystem.
     pub fs: forensic_vfs::DynFs,
-    /// The locator, rooted at [`Layer::Directory`](forensic_vfs::Layer::Directory).
+    /// The locator, rooted at `forensic_vfs::Layer::Directory`.
     pub spec: Locator,
 }
 

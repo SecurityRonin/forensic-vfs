@@ -592,6 +592,12 @@ mod tests {
         // Layer::Directory was added, testing nothing about the new variant.
         // A base directory root, and one carrying a filesystem above it.
         roundtrip(&Locator::directory("/evidence/backup"));
+        // Display is a separate rendering from to_uri and does not round-trip,
+        // so the round-trip above never reaches its arm.
+        assert_eq!(
+            Locator::directory("/evidence/backup").to_string(),
+            "dir:/evidence/backup"
+        );
         roundtrip(&Locator::directory("/evidence/backup").push(Layer::Fs {
             kind: FsKind::APFS,
             at: NodeAddr::File(FileId::Opaque(0)),

@@ -200,7 +200,7 @@ pub trait ArchiveOpen: Send + Sync {
 ///
 /// [`TreeOpen::open`] receives the [`CredentialSource`](crate::encryption::CredentialSource)
 /// directly rather than having it threaded through an
-/// [`EncryptionLayer`](crate::encryption::EncryptionLayer) beneath it. A tree is
+/// [`EncryptionLayer`] beneath it. A tree is
 /// not decrypted as a unit — an iOS backup wraps each file under its own
 /// protection-class key — so there is no sector stream to translate and the
 /// mount itself is what needs the credential.
