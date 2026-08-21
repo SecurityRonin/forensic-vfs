@@ -210,10 +210,26 @@ pub struct ResolvedTree {
 impl SourceOpen for Openers {
     fn open_tree(
         &self,
-        _root: &std::path::Path,
-        _creds: &dyn CredentialSource,
+        root: &std::path::Path,
+        creds: &dyn CredentialSource,
     ) -> VfsResult<Option<ResolvedTree>> {
-        // RED: the contract is declared, the dispatch is not written yet.
+        for opener in self.trees() {
+            if !opener.probe(root).is_candidate() {
+                continue;
+            }
+
+            // A positive probe makes any failure below a nameable condition
+            // about identified evidence, so it propagates. Swallowing it into
+            // Ok(None) would report a locked or damaged backup as "not
+            // recognized" — the bootstrap-failure-as-empty-result defect, and
+            // the reading an examiner is least able to argue with.
+            let fs = opener.open(root, creds)?;
+            return Ok(Some(ResolvedTree {
+                fs,
+                spec: Locator::directory(root),
+            }));
+        }
+        // Nothing claimed it: an ordinary directory, not a failure.
         Ok(None)
     }
 

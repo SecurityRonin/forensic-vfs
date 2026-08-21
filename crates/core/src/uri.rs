@@ -587,6 +587,15 @@ mod tests {
 
     #[test]
     fn every_layer_kind_round_trips() {
+        // This list is hand-maintained, so it covers "every layer kind" only for
+        // as long as someone remembers to extend it — it went on passing when
+        // Layer::Directory was added, testing nothing about the new variant.
+        // A base directory root, and one carrying a filesystem above it.
+        roundtrip(&Locator::directory("/evidence/backup"));
+        roundtrip(&Locator::directory("/evidence/backup").push(Layer::Fs {
+            kind: FsKind::APFS,
+            at: NodeAddr::File(FileId::Opaque(0)),
+        }));
         roundtrip(&Locator::file("/x").push(Layer::Range {
             start: 512,
             len: 1_048_576,
