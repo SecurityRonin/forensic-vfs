@@ -149,6 +149,7 @@ fn encryption_token(s: EncryptionScheme) -> &'static str {
         EncryptionScheme::FileVault => "filevault",
         EncryptionScheme::ApfsEncrypted => "apfsencrypted",
         EncryptionScheme::VeraCrypt => "veracrypt",
+        EncryptionScheme::IosBackup => "iosbackup",
     }
 }
 fn parse_encryption(t: &str, ctx: &str) -> VfsResult<EncryptionScheme> {
@@ -159,6 +160,7 @@ fn parse_encryption(t: &str, ctx: &str) -> VfsResult<EncryptionScheme> {
         "filevault" => EncryptionScheme::FileVault,
         "apfsencrypted" => EncryptionScheme::ApfsEncrypted,
         "veracrypt" => EncryptionScheme::VeraCrypt,
+        "iosbackup" => EncryptionScheme::IosBackup,
         _ => return Err(err("unknown encryption scheme", ctx)),
     })
 }
@@ -669,16 +671,36 @@ mod tests {
 
     #[test]
     fn every_encryption_scheme_token_round_trips() {
-        // Each FDE scheme's `encryption:<scheme>` token must survive to_uri ->
+        // Each scheme's `encryption:<scheme>` token must survive to_uri ->
         // from_uri byte-for-byte, mirroring the container/volume token tests.
-        for scheme in [
+        //
+        // The list below is hand-maintained and therefore covers "every scheme"
+        // only until someone adds one — the same shape that let
+        // every_layer_kind_round_trips go on passing after Layer::Directory
+        // appeared. The match underneath is the guard: it has no wildcard, so a
+        // new variant fails to COMPILE here and whoever adds it is forced to
+        // extend the list rather than discovering the gap in production.
+        let all = [
             EncryptionScheme::Bitlocker,
             EncryptionScheme::Luks1,
             EncryptionScheme::Luks2,
             EncryptionScheme::FileVault,
             EncryptionScheme::ApfsEncrypted,
             EncryptionScheme::VeraCrypt,
-        ] {
+            EncryptionScheme::IosBackup,
+        ];
+        for scheme in all {
+            // Exhaustiveness guard. Adding a variant breaks this arm, not a
+            // customer's mount.
+            match scheme {
+                EncryptionScheme::Bitlocker
+                | EncryptionScheme::Luks1
+                | EncryptionScheme::Luks2
+                | EncryptionScheme::FileVault
+                | EncryptionScheme::ApfsEncrypted
+                | EncryptionScheme::VeraCrypt
+                | EncryptionScheme::IosBackup => {}
+            }
             roundtrip(&Locator::file("/x").push(Layer::Encryption { scheme }));
         }
     }
