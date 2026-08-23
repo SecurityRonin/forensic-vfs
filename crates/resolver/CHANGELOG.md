@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-resolver-v0.3.2...forensic-vfs-resolver-v0.4.0) - 2026-08-23
+
+### Added
+
+- *(tree)* a directory-rooted opener seam for captured file trees ([#20](https://github.com/SecurityRonin/forensic-vfs/pull/20))
+
 ## [0.3.2] - 2026-08-09
 
 ### Fixed

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-v0.7.2...forensic-vfs-v0.8.0) - 2026-08-23
+
+### Added
+
+- *(encryption)* a scheme a TreeOpen can honestly ask for credentials with ([#22](https://github.com/SecurityRonin/forensic-vfs/pull/22))
+- *(tree)* a directory-rooted opener seam for captured file trees ([#20](https://github.com/SecurityRonin/forensic-vfs/pull/20))
+
 ## [0.7.2] - 2026-08-09
 
 ### Fixed
