@@ -9,7 +9,14 @@
 use crate::error::VfsResult;
 use crate::source::DynSource;
 
-/// The FDE scheme.
+/// The encryption scheme a credential is being offered for.
+///
+/// Mostly full-disk schemes, because that is what a byte-stream layer meets.
+/// [`EncryptionScheme::IosBackup`] is the exception, and it belongs here rather
+/// than in a parallel enum because [`CredentialSource`] keys on this type: a
+/// [`TreeOpen`](crate::registry::TreeOpen) with no honest value to pass would
+/// have to name an unrelated volume scheme to ask for its password — a lie told
+/// to a credential provider, which then answers for the wrong thing.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EncryptionScheme {
@@ -20,6 +27,11 @@ pub enum EncryptionScheme {
     ApfsEncrypted,
     /// VeraCrypt / TrueCrypt full-volume encryption (XTS, optional cipher cascade).
     VeraCrypt,
+    /// An iOS backup's keybag. Not full-disk: the tree holds the keys and each
+    /// file is wrapped under its own protection class, so there is no volume to
+    /// unlock and no sector stream to translate — the mount itself consumes the
+    /// credential.
+    IosBackup,
 }
 
 /// One credential offered to a encryption layer.
