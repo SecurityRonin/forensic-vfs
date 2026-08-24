@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-v0.8.0...forensic-vfs-v0.9.0) - 2026-08-24
+
+### Added
+
+- *(fs)* distinguish char/block devices and FIFOs from sockets ([#23](https://github.com/SecurityRonin/forensic-vfs/pull/23))
+
 ## [0.8.0](https://github.com/SecurityRonin/forensic-vfs/compare/forensic-vfs-v0.7.2...forensic-vfs-v0.8.0) - 2026-08-23
 
 ### Added
