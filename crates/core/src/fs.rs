@@ -76,14 +76,85 @@ pub enum Allocation {
 }
 
 /// What kind of node this is.
+///
+/// Character and block devices are separate variants, and FIFOs and sockets are
+/// not folded into [`NodeKind::Other`], because the distinctions are evidence.
+/// The Sleuth Kit's `fls` reports `c` and `b` separately, and `p` and `s`
+/// separately; a reader that collapses them cannot be reconciled against it, and
+/// an examiner cannot tell a named pipe from a socket from a type the reader
+/// simply did not recognise.
+///
+/// A reader maps to the most specific variant its format records, falling back
+/// to [`NodeKind::Device`] or [`NodeKind::Other`] only when the format genuinely
+/// says no more than that.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
     File,
     Dir,
     Symlink,
+    /// A device node whose class the reader could not determine. Prefer
+    /// [`NodeKind::CharDevice`] / [`NodeKind::BlockDevice`] whenever the format
+    /// records which; this is for the genuine "device, and no more" case, not a
+    /// shorthand for "I did not look".
     Device,
+    /// Character special device.
+    CharDevice,
+    /// Block special device.
+    BlockDevice,
+    /// FIFO / named pipe.
+    Fifo,
+    /// Unix-domain socket.
+    Socket,
     Other,
+}
+
+#[cfg(test)]
+mod node_kind_tests {
+    use super::NodeKind;
+
+    /// Every `NodeKind` a reader can report, pinned.
+    ///
+    /// This lives **inside** the crate deliberately: `NodeKind` is
+    /// `#[non_exhaustive]`, so from an integration test in `tests/` a
+    /// wildcard-free match is rejected outright and the guard cannot exist. Here
+    /// the match compiles, and a new variant breaks it — forcing whoever adds one
+    /// to decide what readers should do with it, rather than discovering the gap
+    /// when an examiner sees a socket reported as a regular file.
+    #[test]
+    fn every_node_kind_is_accounted_for() {
+        for k in [
+            NodeKind::File,
+            NodeKind::Dir,
+            NodeKind::Symlink,
+            NodeKind::Device,
+            NodeKind::CharDevice,
+            NodeKind::BlockDevice,
+            NodeKind::Fifo,
+            NodeKind::Socket,
+            NodeKind::Other,
+        ] {
+            match k {
+                NodeKind::File
+                | NodeKind::Dir
+                | NodeKind::Symlink
+                | NodeKind::Device
+                | NodeKind::CharDevice
+                | NodeKind::BlockDevice
+                | NodeKind::Fifo
+                | NodeKind::Socket
+                | NodeKind::Other => {}
+            }
+        }
+
+        // The pairs exist because `fls` reports them separately (`c` vs `b`,
+        // `p` vs `s`); collapsing either would make a differential comparison
+        // against TSK impossible.
+        assert_ne!(NodeKind::CharDevice, NodeKind::BlockDevice);
+        assert_ne!(NodeKind::Fifo, NodeKind::Socket);
+        assert_ne!(NodeKind::Device, NodeKind::CharDevice);
+        assert_ne!(NodeKind::Fifo, NodeKind::Other);
+    }
 }
 
 /// Where a timestamp came from — an NTFS `$STANDARD_INFORMATION` time and a
