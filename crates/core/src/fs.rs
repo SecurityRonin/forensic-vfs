@@ -51,8 +51,23 @@ pub enum StreamId {
 pub enum StreamKind {
     NtfsData,
     NtfsAds,
+    /// An HFS+/HFSX **data** fork — the counterpart of [`Self::HfsResourceFork`].
+    ///
+    /// Named rather than folded into [`Self::Data`] because on HFS+ "data fork"
+    /// is half of a real two-fork model: a consumer that sees one needs to know
+    /// the other may exist.
+    HfsDataFork,
     HfsResourceFork,
     ApfsNamed,
+    /// A file's ordinary contents on a filesystem with no multi-stream model —
+    /// ext2/3/4, XFS, Btrfs, UFS, UDF, ZFS, FAT, ISO 9660.
+    ///
+    /// Distinct from the per-filesystem variants on purpose. Those exist where
+    /// the filesystem itself distinguishes several kinds of content and the
+    /// distinction is evidential; this one says the opposite, and saying it
+    /// explicitly is better than borrowing another filesystem's label for a
+    /// stream that is simply the file.
+    Data,
     Xattr,
     SyntheticSlack,
 }
