@@ -9,3 +9,6 @@ Thumbs.db
 fuzz/target
 fuzz/corpus
 fuzz/Cargo.lock
+
+# Agent worktrees are scratch, never repo content (they commit as gitlinks).
+.claude/worktrees/
